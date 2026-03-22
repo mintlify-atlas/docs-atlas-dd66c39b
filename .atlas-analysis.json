@@ -1,0 +1,166 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "OBLITERATUS",
+  "projectDescription": "An open-source toolkit for analyzing and surgically removing refusal behaviors from large language models using mechanistic interpretability techniques.",
+  "theme": "maple",
+  "primaryColor": "#fac518",
+  "lightColor": "#fcefd0",
+  "darkColor": "#414043",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Usage",
+            "pages": [
+              "usage/huggingface-spaces",
+              "usage/local-ui",
+              "usage/cli",
+              "usage/python-api",
+              "usage/colab",
+              "usage/yaml-configs"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/abliteration",
+              "concepts/refusal-directions",
+              "concepts/intervention-paradigms"
+            ]
+          },
+          {
+            "group": "Obliteration Methods",
+            "pages": [
+              "methods/overview",
+              "methods/basic",
+              "methods/advanced",
+              "methods/surgical",
+              "methods/optimized",
+              "methods/informed-pipeline"
+            ]
+          },
+          {
+            "group": "Analysis Modules",
+            "pages": [
+              "analysis/overview",
+              "analysis/cross-layer-alignment",
+              "analysis/activation-probing",
+              "analysis/concept-cone-geometry",
+              "analysis/alignment-imprint",
+              "analysis/defense-robustness",
+              "analysis/steering-vectors",
+              "analysis/evaluation-suite"
+            ]
+          },
+          {
+            "group": "Ablation Studies",
+            "pages": [
+              "ablation/strategies",
+              "ablation/presets",
+              "ablation/model-library"
+            ]
+          },
+          {
+            "group": "Community Research",
+            "pages": [
+              "community/overview",
+              "community/telemetry",
+              "community/leaderboard",
+              "community/contributing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core",
+            "pages": [
+              "api/abliteration-pipeline",
+              "api/informed-pipeline",
+              "api/sweep"
+            ]
+          },
+          {
+            "group": "Analysis",
+            "pages": [
+              "api/analysis-modules",
+              "api/steering-vectors"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "api/cli-reference"
+            ]
+          },
+          {
+            "group": "Community",
+            "pages": [
+              "api/community"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "One-click refusal removal via HuggingFace Spaces, local UI, CLI, and Python API",
+    "15 analysis modules for mechanistic interpretability of refusal directions",
+    "7 liberation methods from basic diff-in-means to analysis-informed surgical pipeline",
+    "Analysis-informed pipeline that auto-configures obliteration based on model geometry",
+    "Steering vectors for reversible inference-time refusal removal",
+    "Community-powered research with anonymous telemetry and crowd-sourced leaderboard",
+    "116 curated models across 5 compute tiers (Tiny to Frontier)",
+    "10 study presets and 4 ablation strategies for general transformer interpretability",
+    "837-test suite covering CLI, all modules, pipeline, and evaluation metrics",
+    "Novel techniques: Expert-Granular Abliteration, CoT-Aware Ablation, COSMIC Layer Selection"
+  ],
+  "publicApiSurface": [
+    "AbliterationPipeline",
+    "InformedAbliterationPipeline",
+    "CrossLayerAlignmentAnalyzer",
+    "RefusalLogitLens",
+    "WhitenedSVDExtractor",
+    "ActivationProbe",
+    "DefenseRobustnessEvaluator",
+    "ConceptConeAnalyzer",
+    "AlignmentImprintDetector",
+    "MultiTokenPositionAnalyzer",
+    "SparseDirectionSurgeon",
+    "CausalRefusalTracer",
+    "ResidualStreamDecomposer",
+    "LinearRefusalProbe",
+    "TransferAnalyzer",
+    "SteeringVectorFactory",
+    "SteeringHookManager",
+    "save_contribution",
+    "load_contributions",
+    "aggregate_results",
+    "TourneyRunner",
+    "run_sweep",
+    "SweepConfig",
+    "obliteratus obliterate",
+    "obliteratus run",
+    "obliteratus ui",
+    "obliteratus interactive",
+    "obliteratus models",
+    "obliteratus presets",
+    "obliteratus strategies",
+    "obliteratus info",
+    "obliteratus aggregate",
+    "obliteratus recommend",
+    "obliteratus tourney"
+  ]
+}

@@ -34,22 +34,32 @@ Error runs (where the pipeline failed) are excluded from aggregation.
     Open the **Leaderboard** tab on the public OBLITERATUS Space. The tab reads from both local session data and the central Hub dataset (`pliny-the-prompter/OBLITERATUS-TELEMETRY`), merging and deduplicating all contributions in real time.
   </Tab>
 
-  <Tab title="CLI: summary">
+  <Tab title="CLI">
     ```bash
-    obliteratus aggregate --format summary
+    obliteratus aggregate
     ```
 
-    Prints a ranked table to stdout showing method, model, run count, and key metrics.
+    Reads contribution JSON files from the default `community_results/` directory and prints a ranked table to stdout showing method, model, run count, and key metrics.
+
+    ```bash
+    # Aggregate from a custom directory
+    obliteratus aggregate --dir ./my_results
+    ```
   </Tab>
 
-  <Tab title="CLI: LaTeX">
-    ```bash
-    obliteratus aggregate --format latex --metric refusal_rate --min-runs 3
+  <Tab title="Python API">
+    For generating paper-ready LaTeX tables, use the Python API directly:
+
+    ```python
+    from obliteratus.community import load_contributions, aggregate_results, generate_latex_table
+
+    records = load_contributions("community_results")
+    aggregated = aggregate_results(records)
+
+    # Generate LaTeX table for refusal_rate
+    latex = generate_latex_table(aggregated, metric="refusal_rate")
+    print(latex)
     ```
-
-    Outputs a LaTeX `tabular` environment suitable for direct inclusion in a paper. The `--min-runs 3` flag filters out model/method combinations with fewer than three contributing runs, reducing noise.
-
-    Available `--metric` values: `refusal_rate`, `perplexity`, `coherence`.
   </Tab>
 </Tabs>
 
@@ -59,17 +69,15 @@ The CLI `aggregate` command reads contribution JSON files from a local directory
 
 ```bash
 # Aggregate from the default community_results/ directory
-obliteratus aggregate --format summary
+obliteratus aggregate
 
 # Aggregate from a custom directory
-obliteratus aggregate --dir ./my_results --format summary
-
-# Generate a LaTeX table filtered to refusal_rate with at least 3 runs
-obliteratus aggregate --format latex --metric refusal_rate --min-runs 3
-
-# Generate a LaTeX table for coherence
-obliteratus aggregate --format latex --metric coherence
+obliteratus aggregate --dir ./my_results
 ```
+
+<Note>
+The CLI `aggregate` command only supports `--dir` to specify the source directory. For more control (LaTeX output, metric filtering, minimum run thresholds), use the Python API via `generate_latex_table()` directly.
+</Note>
 
 ## How aggregation works
 
@@ -159,7 +167,7 @@ With `--insights`, the command also runs a subset of the analysis modules locall
   </Accordion>
 
   <Accordion title="How much weight should I give to runs with n=1?">
-    Single-run entries (`runs: 1`) have no variance estimate and may reflect hardware-specific anomalies. Look for entries with `runs >= 3` for reliable conclusions. Use `--min-runs 3` with the `aggregate` command to filter automatically.
+    Single-run entries (`runs: 1`) have no variance estimate and may reflect hardware-specific anomalies. Look for entries with `runs >= 3` for reliable conclusions. When using the Python API, filter results manually: `{m: v for m, v in methods.items() if v["n_runs"] >= 3}`.
   </Accordion>
 
   <Accordion title="Why are some model/method combinations missing?">

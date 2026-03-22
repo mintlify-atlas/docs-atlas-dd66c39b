@@ -33,6 +33,7 @@ The `informed` pipeline uses four of these modules automatically to auto-configu
 
 ```python
 from obliteratus.analysis import (
+    # Core 15 analysis modules
     CrossLayerAlignmentAnalyzer,
     RefusalLogitLens,
     WhitenedSVDExtractor,
@@ -48,6 +49,22 @@ from obliteratus.analysis import (
     TransferAnalyzer,
     SteeringVectorFactory,
     SteeringHookManager,
+    # Extended analysis modules
+    SparseAutoencoder,
+    train_sae,
+    identify_refusal_features,
+    SAEDecompositionPipeline,
+    TunedLensTrainer,
+    RefusalTunedLens,
+    RiemannianManifoldAnalyzer,
+    AntiOuroborosProber,
+    ConditionalAbliterator,
+    WassersteinRefusalTransfer,
+    SpectralCertifier,
+    CertificationLevel,
+    ActivationPatcher,
+    WassersteinOptimalExtractor,
+    BayesianKernelProjection,
 )
 ```
 

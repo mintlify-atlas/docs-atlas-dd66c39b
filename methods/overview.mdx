@@ -1,23 +1,39 @@
 ---
 title: "Methods Overview"
-description: "Compare all seven obliteration methods to pick the right one for your use case."
+description: "Compare all obliteration methods and baseline reproductions to pick the right one for your use case."
 ---
 
-OBLITERATUS ships with seven weight-projection presets and one analysis-informed pipeline. Each preset is a named bundle of parameters in the `METHODS` dict — you select one with `--method` on the CLI or `method=` in the Python API.
+OBLITERATUS ships with multiple weight-projection presets, an analysis-informed pipeline, and faithful reproductions of competing SOTA methods. Each preset is a named bundle of parameters in the `METHODS` dict — you select one with `--method` on the CLI or `method=` in the Python API.
 
-## The seven presets
+## Primary methods
 
 | Method | Directions | Direction extraction | Key features | Best for |
 |--------|-----------|---------------------|--------------|----------|
 | `basic` | 1 | diff-in-means | Fast baseline, no norm preservation | Quick tests, small models, first runs |
 | `advanced` | 4 | SVD | Norm-preserving biprojection, bias projection, 2 refinement passes | **Default.** Clean removal, minimal capability loss |
 | `aggressive` | 8 | Whitened SVD | Jailbreak contrast, layer-adaptive strength, head surgery, winsorization, 3 passes | Maximum guardrail removal |
+| `spectral_cascade` | 6 | Whitened SVD | DCT frequency decomposition across layer axis; low-freq bands get strong projection, high-freq preserved | Cleaner capability preservation via frequency separation |
 | `surgical` | 8 | Whitened SVD | Expert-Granular Abliteration (EGA), SAE features, safety-neuron masking, MoE-aware | Precision MoE models (DeepSeek, Qwen MoE) |
 | `optimized` | 4 | Whitened SVD | Bayesian auto-tune (Optuna TPE, 50 trials), CoT-aware ablation, KL co-optimization | Best quality when compute budget allows optimization |
 | `inverted` | 8 | Whitened SVD | 2× orthogonal reflection (semantic inversion), per-expert MoE routing | Refusal inversion experiments |
 | `nuclear` | 4 | Whitened SVD | All techniques + expert transplant (10% blend) + activation steering, 1.25× reflection | Maximum force on stubborn MoE models |
 
 Plus the **`informed`** method, which uses `InformedAbliterationPipeline` to run four analysis modules between PROBE and DISTILL and auto-configure every parameter. See [Analysis-Informed Pipeline](/methods/informed-pipeline).
+
+## Baseline reproductions
+
+OBLITERATUS also includes faithful reproductions of competing SOTA methods, sharing the same evaluation pipeline for head-to-head comparison via the `tourney` command:
+
+| Method | Description | Based on |
+|--------|-------------|----------|
+| `failspy` | Single diff-in-means, all layers except first, no norm preservation — matches FailSpy/abliterator source | FailSpy/abliterator (2024) |
+| `gabliteration` | SVD top-4 directions, ridge-regularized (α=0.3), variance-based layer selection | Gülmez (arXiv:2512.18901) |
+| `heretic` | Bayesian TPE optimization, LoRA-based delta-W ablation, linear bell-curve layer weighting, float direction index | p-e-w/heretic (2025–2026) |
+| `rdo` | Gradient-based refinement of SVD directions via a differentiable linear refusal probe | Wollschlager et al., ICML 2025 |
+
+<Note>
+Baseline reproductions are intended for benchmarking comparisons. For production use, choose one of the primary methods above. The `tourney` command runs all methods against each other and pushes the winner to HuggingFace Hub.
+</Note>
 
 ## Two intervention paradigms
 

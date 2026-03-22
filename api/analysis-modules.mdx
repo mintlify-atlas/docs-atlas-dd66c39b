@@ -9,6 +9,7 @@ OBLITERATUS ships with a comprehensive suite of analysis modules for mechanistic
 
 ```python
 from obliteratus.analysis import (
+    # Core 15 analysis modules
     CrossLayerAlignmentAnalyzer,
     RefusalLogitLens,
     WhitenedSVDExtractor,
@@ -24,6 +25,22 @@ from obliteratus.analysis import (
     TransferAnalyzer,
     SteeringVectorFactory,
     SteeringHookManager,
+    # Advanced / extended modules
+    SparseAutoencoder,
+    train_sae,
+    identify_refusal_features,
+    SAEDecompositionPipeline,
+    TunedLensTrainer,
+    RefusalTunedLens,
+    RiemannianManifoldAnalyzer,
+    AntiOuroborosProber,
+    ConditionalAbliterator,
+    WassersteinRefusalTransfer,
+    SpectralCertifier,
+    CertificationLevel,
+    ActivationPatcher,
+    WassersteinOptimalExtractor,
+    BayesianKernelProjection,
 )
 ```
 
@@ -558,6 +575,212 @@ See the [Steering Vectors API](/api/steering-vectors) page for the full referenc
 <Accordion title="SteeringHookManager">
 
 See the [Steering Vectors API](/api/steering-vectors) page for the full reference.
+
+</Accordion>
+
+<Accordion title="SAE modules (SparseAutoencoder, SAEDecompositionPipeline)">
+
+**Module:** `obliteratus.analysis.sae_abliteration`
+
+Sparse Autoencoder tools for feature-level refusal analysis. SAEs decompose hidden states into interpretable sparse features; refusal-correlated features can then be directly targeted for ablation.
+
+```python
+from obliteratus.analysis import (
+    SparseAutoencoder,
+    train_sae,
+    identify_refusal_features,
+    SAEDecompositionPipeline,
+)
+
+# Train a sparse autoencoder on harmful activations
+sae = train_sae(
+    activations=pipeline._harmful_acts[layer_idx],
+    n_features=256,
+    l1_coefficient=1e-3,
+)
+
+# Find features correlated with refusal
+refusal_features = identify_refusal_features(
+    sae=sae,
+    harmful_acts=pipeline._harmful_acts[layer_idx],
+    harmless_acts=pipeline._harmless_acts[layer_idx],
+)
+
+# Full pipeline: SAE train + feature identification + weight surgery
+sae_pipe = SAEDecompositionPipeline(pipeline)
+sae_pipe.run(layers=pipeline._strong_layers)
+```
+
+</Accordion>
+
+<Accordion title="TunedLensTrainer / RefusalTunedLens">
+
+**Module:** `obliteratus.analysis.tuned_lens`
+
+Trains a learned linear translator (tuned lens) at each layer to map intermediate representations into vocabulary space. Unlike the logit lens (which uses the final unembedding directly), the tuned lens learns a per-layer affine transformation, producing more accurate per-layer predictions of which token the model is "thinking about."
+
+```python
+from obliteratus.analysis import TunedLensTrainer, RefusalTunedLens
+
+trainer = TunedLensTrainer(pipeline.handle.model, pipeline.handle.tokenizer)
+lens = trainer.train(pipeline._harmful_acts)
+
+refusal_lens = RefusalTunedLens(lens)
+result = refusal_lens.analyze(pipeline.refusal_directions)
+```
+
+</Accordion>
+
+<Accordion title="RiemannianManifoldAnalyzer">
+
+**Module:** `obliteratus.analysis.riemannian_manifold`
+
+Analyzes the Riemannian geometry of the refusal direction manifold across layers — treating refusal directions as points on the unit hypersphere and computing geodesic distances, curvature estimates, and manifold dimensionality.
+
+```python
+from obliteratus.analysis import RiemannianManifoldAnalyzer
+
+analyzer = RiemannianManifoldAnalyzer()
+result = analyzer.analyze(pipeline.refusal_directions)
+print(f"Geodesic diameter: {result.geodesic_diameter:.3f} rad")
+print(f"Intrinsic dimensionality: {result.intrinsic_dim:.2f}")
+```
+
+</Accordion>
+
+<Accordion title="AntiOuroborosProber">
+
+**Module:** `obliteratus.analysis.anti_ouroboros`
+
+Probes for the Ouroboros self-repair effect after excision — tests whether the model attempts to reconstruct refusal behavior through alternative circuits after the primary refusal subspace has been removed.
+
+```python
+from obliteratus.analysis import AntiOuroborosProber
+
+prober = AntiOuroborosProber(pipeline)
+result = prober.probe_post_excision()
+print(f"Self-repair detected: {result.self_repair_detected}")
+print(f"Compensating layers: {result.compensating_layers}")
+```
+
+</Accordion>
+
+<Accordion title="ConditionalAbliterator">
+
+**Module:** `obliteratus.analysis.conditional_abliteration`
+
+Performs conditional abliteration — applying different obliteration strengths based on harm category. Useful when you want to remove specific types of refusal (e.g., only violence-related) while preserving others (e.g., CSAM).
+
+```python
+from obliteratus.analysis import ConditionalAbliterator
+
+abliterator = ConditionalAbliterator(pipeline)
+abliterator.run(
+    category_strengths={
+        "violence": 1.0,
+        "illegal": 0.8,
+        "harmful_info": 0.5,
+    }
+)
+```
+
+</Accordion>
+
+<Accordion title="WassersteinRefusalTransfer">
+
+**Module:** `obliteratus.analysis.wasserstein_transfer`
+
+Measures cross-model refusal direction transfer using Wasserstein distance (Earth Mover's Distance) between activation distributions, providing a distribution-level transfer metric complementary to the cosine-similarity-based `TransferAnalyzer`.
+
+```python
+from obliteratus.analysis import WassersteinRefusalTransfer
+
+transfer = WassersteinRefusalTransfer()
+result = transfer.measure_transfer(
+    source_acts=pipeline_a._harmful_acts,
+    target_acts=pipeline_b._harmful_acts,
+)
+print(f"Wasserstein transfer score: {result.transfer_score:.4f}")
+```
+
+</Accordion>
+
+<Accordion title="SpectralCertifier / CertificationLevel">
+
+**Module:** `obliteratus.analysis.spectral_certification`
+
+Provides a formal spectral certificate of refusal removal — computes an upper bound on residual refusal signal in the projected weight matrices using spectral norm analysis.
+
+```python
+from obliteratus.analysis import SpectralCertifier, CertificationLevel
+
+certifier = SpectralCertifier(pipeline)
+cert = certifier.certify()
+print(f"Certification level: {cert.level}")      # CertificationLevel enum
+print(f"Max residual signal: {cert.max_residual:.6f}")
+print(f"Certified layers: {cert.certified_layers}")
+```
+
+`CertificationLevel` values: `CERTIFIED`, `PARTIAL`, `UNVERIFIED`.
+
+</Accordion>
+
+<Accordion title="ActivationPatcher">
+
+**Module:** `obliteratus.analysis.activation_patching`
+
+Performs activation patching experiments — replaces activations from a corrupted run with clean activations at specific positions and layers to measure causal effect. More accurate than the simulation-based `CausalRefusalTracer`.
+
+```python
+from obliteratus.analysis import ActivationPatcher
+
+patcher = ActivationPatcher(pipeline.handle.model, pipeline.handle.tokenizer)
+result = patcher.patch_and_measure(
+    clean_prompt=harmless_prompt,
+    corrupted_prompt=harmful_prompt,
+    patch_layers=pipeline._strong_layers,
+    refusal_direction=pipeline.refusal_directions,
+)
+print(f"Causal effect: {result.causal_effect:.4f}")
+```
+
+</Accordion>
+
+<Accordion title="WassersteinOptimalExtractor">
+
+**Module:** `obliteratus.analysis.wasserstein_optimal`
+
+Extracts refusal directions by solving a Wasserstein optimal transport problem between harmful and harmless activation distributions. Produces directions aligned with the distributional shift between the two conditions rather than the mean shift.
+
+```python
+from obliteratus.analysis import WassersteinOptimalExtractor
+
+extractor = WassersteinOptimalExtractor()
+result = extractor.extract(
+    harmful_activations=pipeline._harmful_acts[layer_idx],
+    harmless_activations=pipeline._harmless_acts[layer_idx],
+    layer_idx=layer_idx,
+)
+print(f"Transport cost: {result.transport_cost:.4f}")
+print(f"Direction: {result.direction.shape}")
+```
+
+</Accordion>
+
+<Accordion title="BayesianKernelProjection">
+
+**Module:** `obliteratus.analysis.bayesian_kernel_projection`
+
+Applies Bayesian optimization to find the optimal per-layer kernel projection strengths. Can be used standalone (outside of `optimized` method) to fine-tune projection strengths post-hoc on an already-probed pipeline.
+
+```python
+from obliteratus.analysis import BayesianKernelProjection
+
+bkp = BayesianKernelProjection(pipeline, n_trials=50)
+result = bkp.optimize()
+print(f"Optimal strengths: {result.layer_strengths}")
+print(f"Best score: {result.best_score:.4f}")
+```
 
 </Accordion>
 

@@ -1,0 +1,342 @@
+---
+title: "Steering Vectors API"
+description: "API reference for SteeringVectorFactory, SteeringHookManager, and SteeringConfig — inference-time refusal intervention without weight modification."
+---
+
+## Overview
+
+Steering vectors provide a non-destructive, reversible alternative to weight projection for suppressing refusal behavior at inference time. Instead of modifying weights permanently, hooks are installed on transformer layers that add or subtract scaled direction vectors from the residual stream during the forward pass.
+
+```python
+from obliteratus.analysis.steering_vectors import (
+    SteeringVectorFactory,
+    SteeringHookManager,
+    SteeringConfig,
+    SteeringVector,
+)
+```
+
+**Advantages over weight projection:**
+- Reversible — hooks can be removed between requests
+- Tunable at inference time without re-running the pipeline
+- Composable — multiple vectors can be combined
+- No permanent weight changes
+
+**Trade-offs:**
+- Slight per-token inference overhead
+- Requires wrapping the forward pass with hooks
+- Effect is per-token, not permanent
+
+---
+
+## `SteeringVector`
+
+```python
+@dataclass
+class SteeringVector:
+    direction: torch.Tensor   # (hidden_dim,) unit vector
+    source_layer: int | None  # layer extracted from (None if synthetic)
+    label: str                # human-readable label (e.g. "refusal")
+    default_alpha: float      # recommended steering strength
+    metadata: dict            # optional extra fields
+```
+
+---
+
+## `SteeringVectorFactory`
+
+Static factory class for constructing `SteeringVector` instances from various sources.
+
+### `from_refusal_direction()`
+
+```python
+@staticmethod
+def from_refusal_direction(
+    refusal_direction: torch.Tensor,
+    source_layer: int | None = None,
+    alpha: float = -1.0,
+) -> SteeringVector
+```
+
+Create a steering vector from a pre-computed refusal direction.
+
+<ParamField path="refusal_direction" type="torch.Tensor" required>
+  `(hidden_dim,)` refusal direction vector (will be normalized internally).
+</ParamField>
+
+<ParamField path="source_layer" type="int | None" default="None">
+  Layer the direction was extracted from (metadata only).
+</ParamField>
+
+<ParamField path="alpha" type="float" default="-1.0">
+  Steering strength. `alpha=-1.0` steers **away** from refusal (suppresses it). Use `alpha=+1.0` to reinforce refusal.
+</ParamField>
+
+**Returns** `SteeringVector` with `label="refusal"`.
+
+### `from_contrastive_pairs()`
+
+```python
+@staticmethod
+def from_contrastive_pairs(
+    positive_activations: list[torch.Tensor],
+    negative_activations: list[torch.Tensor],
+    label: str = "contrastive",
+    alpha: float = 1.0,
+) -> SteeringVector
+```
+
+Create a steering vector from contrastive activation pairs via difference-in-means.
+
+```
+vector = mean(positive) - mean(negative)
+```
+
+<ParamField path="positive_activations" type="list[torch.Tensor]" required>
+  Activations from "positive" concept examples (e.g., harmful prompts that trigger refusal).
+</ParamField>
+
+<ParamField path="negative_activations" type="list[torch.Tensor]" required>
+  Activations from "negative" concept examples (e.g., harmless prompts).
+</ParamField>
+
+<ParamField path="label" type="str" default="contrastive">
+  Human-readable label for the vector.
+</ParamField>
+
+<ParamField path="alpha" type="float" default="1.0">
+  Default steering strength.
+</ParamField>
+
+**Returns** `SteeringVector` with `metadata` including `n_positive`, `n_negative`, and `raw_magnitude`.
+
+### `combine()`
+
+```python
+@staticmethod
+def combine(
+    vectors: list[SteeringVector],
+    weights: list[float] | None = None,
+    label: str = "combined",
+) -> SteeringVector
+```
+
+Combine multiple steering vectors into one via weighted sum (then re-normalized).
+
+<ParamField path="vectors" type="list[SteeringVector]" required>
+  List of `SteeringVector` to combine.
+</ParamField>
+
+<ParamField path="weights" type="list[float] | None" default="None">
+  Per-vector weights. If `None`, equal weights are used.
+</ParamField>
+
+<ParamField path="label" type="str" default="combined">
+  Label for the resulting vector.
+</ParamField>
+
+---
+
+## `SteeringConfig`
+
+Configuration passed to `SteeringHookManager.install()`.
+
+```python
+@dataclass
+class SteeringConfig:
+    vectors: list[SteeringVector]
+    target_layers: list[int]
+    alpha: float = 1.0
+    per_layer_alpha: dict[int, float] = field(default_factory=dict)
+    position: str = "all"
+    normalize: bool = True
+```
+
+<ParamField path="vectors" type="list[SteeringVector]" required>
+  One or more steering vectors to apply.
+</ParamField>
+
+<ParamField path="target_layers" type="list[int]" required>
+  Layer indices at which to install hooks.
+</ParamField>
+
+<ParamField path="alpha" type="float" default="1.0">
+  Global scaling factor applied to all vectors at all layers.
+</ParamField>
+
+<ParamField path="per_layer_alpha" type="dict[int, float]" default="{}">
+  Per-layer alpha overrides. Takes precedence over global `alpha` for the specified layers.
+</ParamField>
+
+<ParamField path="position" type="str" default="all">
+  Which token positions to steer. One of:
+  - `"all"` — all positions (broadest effect)
+  - `"last"` — final token only (most targeted)
+  - `"first"` — first token only
+</ParamField>
+
+<ParamField path="normalize" type="bool" default="True">
+  Normalize vectors to unit norm before scaling by alpha.
+</ParamField>
+
+---
+
+## `SteeringHookManager`
+
+Manages the lifecycle of inference-time steering hooks on a model.
+
+### Constructor
+
+```python
+manager = SteeringHookManager()
+```
+
+No constructor arguments. Creates a new manager with no active hooks.
+
+### `install()`
+
+```python
+def install(
+    self,
+    model: nn.Module,
+    config: SteeringConfig,
+    layer_modules: list[nn.Module] | None = None,
+) -> SteeringResult
+```
+
+Install steering hooks on the model. Calls `remove()` first to clean up any existing hooks.
+
+<ParamField path="model" type="nn.Module" required>
+  The transformer model.
+</ParamField>
+
+<ParamField path="config" type="SteeringConfig" required>
+  Steering configuration specifying vectors, layers, and alphas.
+</ParamField>
+
+<ParamField path="layer_modules" type="list[nn.Module] | None" default="None">
+  Explicit layer module list. If `None`, auto-detected from common transformer attribute paths (`model.layers`, `transformer.h`, etc.).
+</ParamField>
+
+**Returns** `SteeringResult` with: `hooks_installed` (int), `total_steered_layers` (int), `config`.
+
+### `remove()`
+
+```python
+def remove(self) -> None
+```
+
+Remove all installed hooks and reset the active flag.
+
+### `is_active`
+
+```python
+@property
+def is_active(self) -> bool
+```
+
+`True` if hooks are currently installed.
+
+---
+
+## `SteeringResult`
+
+```python
+@dataclass
+class SteeringResult:
+    config: SteeringConfig
+    hooks_installed: int
+    total_steered_layers: int
+```
+
+---
+
+## Code Examples
+
+<CodeGroup>
+```python From Pipeline Refusal Direction
+from obliteratus.abliterate import AbliterationPipeline
+from obliteratus.analysis.steering_vectors import (
+    SteeringVectorFactory, SteeringHookManager, SteeringConfig
+)
+
+# Step 1: Run pipeline (or just probe+distill)
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",
+)
+# Only run up to distill to get directions without modifying weights:
+pipeline._summon()
+pipeline._probe()
+pipeline._distill()
+
+# Step 2: Build steering vector from best refusal layer
+best_layer = pipeline._strong_layers[0]
+vec = SteeringVectorFactory.from_refusal_direction(
+    refusal_direction=pipeline.refusal_directions[best_layer],
+    source_layer=best_layer,
+    alpha=-1.0,  # steer away from refusal
+)
+
+# Step 3: Configure and install hooks
+config = SteeringConfig(
+    vectors=[vec],
+    target_layers=pipeline._strong_layers[:4],  # top 4 layers
+    alpha=1.5,
+    position="last",
+)
+manager = SteeringHookManager()
+result = manager.install(pipeline.handle.model, config)
+print(f"Installed {result.hooks_installed} hooks")
+
+# Step 4: Generate (hooks active)
+inputs = pipeline.handle.tokenizer("How do I make explosives?", return_tensors="pt")
+outputs = pipeline.handle.model.generate(**inputs, max_new_tokens=200)
+print(pipeline.handle.tokenizer.decode(outputs[0]))
+
+# Step 5: Remove hooks when done
+manager.remove()
+```
+
+```python From Contrastive Activation Pairs
+from obliteratus.analysis.steering_vectors import (
+    SteeringVectorFactory, SteeringHookManager, SteeringConfig
+)
+
+# Collect activations from the model
+harmful_acts = [...]   # list of (hidden_dim,) tensors
+harmless_acts = [...]  # same length
+
+vec = SteeringVectorFactory.from_contrastive_pairs(
+    positive_activations=harmful_acts,
+    negative_activations=harmless_acts,
+    label="refusal",
+    alpha=-1.0,
+)
+
+config = SteeringConfig(
+    vectors=[vec],
+    target_layers=[14, 15, 16, 17, 18],
+    alpha=2.0,
+    position="all",
+)
+manager = SteeringHookManager()
+manager.install(model, config)
+```
+
+```python Combine Multiple Vectors
+from obliteratus.analysis.steering_vectors import SteeringVectorFactory
+
+# Build per-category vectors from the informed pipeline
+vec_weapons = SteeringVectorFactory.from_refusal_direction(weapons_dir, alpha=-1.0)
+vec_cyber = SteeringVectorFactory.from_refusal_direction(cyber_dir, alpha=-1.0)
+vec_fraud = SteeringVectorFactory.from_refusal_direction(fraud_dir, alpha=-1.0)
+
+# Combine with equal weights
+combined = SteeringVectorFactory.combine(
+    vectors=[vec_weapons, vec_cyber, vec_fraud],
+    weights=[0.4, 0.35, 0.25],
+    label="multi_category_refusal",
+)
+```
+</CodeGroup>

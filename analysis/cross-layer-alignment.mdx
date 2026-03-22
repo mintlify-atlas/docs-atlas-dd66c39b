@@ -1,0 +1,116 @@
+---
+title: "Cross-Layer Alignment"
+description: "Map how refusal direction evolves across transformer layers and identify direction clusters."
+---
+
+`CrossLayerAlignmentAnalyzer` answers a fundamental question in abliteration research: does refusal use the *same* direction propagated through the residual stream, or *different* directions at each layer? The answer determines whether single-layer surgery is sufficient or whether multi-cluster targeting is required.
+
+## What it measures
+
+The analyzer computes a pairwise cosine similarity matrix across all layers that have refusal directions. Each entry `[i, j]` is the absolute cosine similarity between the refusal direction at layer `i` and layer `j`.
+
+From this matrix it derives:
+
+| Output | What it tells you |
+|--------|-------------------|
+| `cosine_matrix` | Full `(n_layers, n_layers)` pairwise similarity — the raw alignment map |
+| `clusters` | Groups of layers sharing similar refusal geometry (cosine ≥ threshold) |
+| `cluster_count` | Number of geometrically distinct refusal direction groups |
+| `direction_persistence_score` | 0 = independent per layer, 1 = single persistent direction |
+| `mean_adjacent_cosine` | Average similarity between consecutive layers |
+| `angular_drift` | Cumulative geodesic distance of direction drift per layer |
+| `total_geodesic_distance` | Total direction drift through the full network |
+
+<Note>
+Cosine similarity is computed on absolute values because SVD direction sign is arbitrary. Two layers with `cos = -0.95` use essentially the same direction.
+</Note>
+
+## When to use it
+
+Run cross-layer alignment analysis when:
+
+- You want to understand where refusal is concentrated before choosing which layers to target
+- You're deciding between single-pass and multi-pass obliteration
+- You need cluster-aware layer selection instead of arbitrary top-k
+- You're comparing refusal geometry across model families
+
+## Python usage
+
+```python
+from obliteratus.analysis import CrossLayerAlignmentAnalyzer
+
+analyzer = CrossLayerAlignmentAnalyzer(cluster_threshold=0.85)
+
+# refusal_directions is {layer_idx: tensor} — as returned by pipeline.refusal_directions
+result = analyzer.analyze(
+    refusal_directions=pipeline.refusal_directions,
+    strong_layers=pipeline._strong_layers,  # optional: restrict to strong-signal layers
+)
+
+print(f"Clusters found: {result.cluster_count}")
+print(f"Persistence score: {result.direction_persistence_score:.3f}")
+print(f"Mean adjacent cosine: {result.mean_adjacent_cosine:.3f}")
+print(f"Total geodesic drift: {result.total_geodesic_distance:.3f} rad")
+
+# Inspect the clusters
+for i, cluster in enumerate(result.clusters):
+    print(f"Cluster {i}: layers {cluster}")
+
+# Access the raw similarity matrix
+print(result.cosine_matrix)  # torch.Tensor, shape (n_layers, n_layers)
+```
+
+### Constructor parameter
+
+```python
+CrossLayerAlignmentAnalyzer(cluster_threshold=0.85)
+```
+
+`cluster_threshold` sets the minimum cosine similarity for two layers to be grouped in the same cluster. Lower values (e.g. `0.70`) produce fewer, broader clusters; higher values (e.g. `0.95`) produce more, tighter clusters.
+
+### `analyze()` parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `refusal_directions` | `dict[int, torch.Tensor]` | `{layer_idx: direction}` — unit vectors of shape `(hidden_dim,)` |
+| `strong_layers` | `list[int] \| None` | Optional subset of layers to analyze. If `None`, all layers in the dict are used. |
+
+## Reading the output
+
+<AccordionGroup>
+  <Accordion title="High persistence score (> 0.8)">
+    The refusal direction is essentially the same across most layers. The residual stream is propagating a single direction. This is the "single direction" hypothesis from Arditi et al. (2024). Single-pass surgery at a few key layers is likely sufficient.
+  </Accordion>
+  <Accordion title="Low persistence score (< 0.5)">
+    Different layers encode refusal independently. Surgery at one cluster may not affect refusal in other clusters. Multi-cluster targeting or the `surgical` method is recommended.
+  </Accordion>
+  <Accordion title="Multiple clusters">
+    The model uses geometrically distinct refusal directions at different functional stages (e.g., harm assessment layers vs. refusal token generation layers). Each cluster may need its own targeted direction extracted and removed.
+  </Accordion>
+  <Accordion title="High total geodesic distance">
+    The refusal direction rotates substantially as it travels through the network. This is associated with CAI-trained models, which use multi-round self-critique that distributes refusal across layers.
+  </Accordion>
+</AccordionGroup>
+
+## How it feeds into the informed pipeline
+
+When using `InformedAbliterationPipeline`, cross-layer alignment analysis runs in the ANALYZE stage and produces cluster-aware layer selection for the EXCISE stage:
+
+- Instead of targeting the top-k layers by refusal signal strength, the pipeline targets one representative layer per cluster
+- If `cluster_count == 1`, a single representative layer per cluster is used — minimal intervention
+- If `cluster_count > 2`, the pipeline increases the number of passes and may escalate projection aggressiveness
+- `direction_persistence_score` is surfaced in `report.insights` after `run_informed()`
+
+```python
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+pipeline = InformedAbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_informed",
+)
+output_path, report = pipeline.run_informed()
+
+# Cross-layer analysis results are embedded in the report
+print(report.insights.cluster_count)
+print(report.insights.direction_persistence_score)
+```

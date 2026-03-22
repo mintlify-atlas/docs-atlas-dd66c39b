@@ -1,0 +1,116 @@
+---
+title: "Activation Probing"
+description: "Measure refusal signal strength at each layer using linear probes on hidden states."
+---
+
+`ActivationProbe` quantifies how much refusal signal remains in a model's activations — either before obliteration (to map where the signal is strongest) or after (to verify that removal was complete). It introduces the **Refusal Elimination Score (RES)**, a single scalar summarizing how thoroughly obliteration worked across all layers.
+
+<Info>
+This module is based on the activation-probing methodology from Arditi et al. (2024), extended with the RES metric and per-layer signal detection.
+</Info>
+
+## What it does
+
+For each layer under analysis, the probe:
+
+1. Collects hidden state activations on a set of harmful prompts and harmless prompts
+2. For each layer, computes the projection of both activation sets onto the refusal direction
+3. Measures the **projection gap** — how much larger the harmful projection is vs. the harmless projection
+4. Computes `separation_d_prime` (signal detection d') as a normalized separability metric
+
+After obliteration, both projections should converge toward zero, and the gap should collapse.
+
+## Key outputs
+
+| Output | Type | Meaning |
+|--------|------|---------|
+| `per_layer` | `dict[int, LayerProbeResult]` | Per-layer probe results |
+| `refusal_elimination_score` | `float` | 0–1 scalar; 1 = complete elimination |
+| `mean_projection_gap` | `float` | Average harmful–harmless gap across layers |
+| `max_residual_projection` | `float` | Worst-case residual in any layer |
+| `layers_with_residual` | `list[int]` | Layers still showing signal above threshold |
+
+### Per-layer result fields
+
+| Field | Meaning |
+|-------|---------|
+| `harmful_mean_projection` | Mean projection of harmful activations onto the refusal direction |
+| `harmless_mean_projection` | Mean projection of harmless activations onto the refusal direction |
+| `projection_gap` | `harmful - harmless` — should approach 0 after successful abliteration |
+| `separation_d_prime` | Signal detection d' — normalized separability between distributions |
+
+## Python usage
+
+```python
+from obliteratus.analysis import ActivationProbe
+
+probe = ActivationProbe(residual_threshold=0.1)
+
+# Probe a single layer
+layer_result = probe.probe_layer(
+    harmful_activations=harmful_acts,    # list of (hidden_dim,) tensors
+    harmless_activations=harmless_acts,  # list of (hidden_dim,) tensors
+    refusal_direction=pipeline.refusal_directions[layer_idx],
+    layer_idx=layer_idx,
+)
+
+print(f"Projection gap at layer {layer_idx}: {layer_result.projection_gap:.4f}")
+print(f"d': {layer_result.separation_d_prime:.4f}")
+```
+
+```python
+# Full multi-layer probe
+result = probe.probe_all_layers(
+    model=model,
+    tokenizer=tokenizer,
+    harmful_prompts=harmful_prompts,
+    harmless_prompts=harmless_prompts,
+    refusal_directions=pipeline.refusal_directions,
+)
+
+print(f"Refusal Elimination Score: {result.refusal_elimination_score:.3f}")
+print(f"Layers with residual signal: {result.layers_with_residual}")
+print(f"Max residual projection: {result.max_residual_projection:.4f}")
+
+# Check per-layer detail
+for layer_idx, layer_result in result.per_layer.items():
+    print(f"  Layer {layer_idx:3d}: gap={layer_result.projection_gap:.4f}  "
+          f"d'={layer_result.separation_d_prime:.3f}")
+```
+
+### Constructor parameter
+
+```python
+ActivationProbe(residual_threshold=0.1)
+```
+
+`residual_threshold` is the projection magnitude below which a layer is considered clean. Layers exceeding this threshold are reported in `layers_with_residual`.
+
+## Interpreting the Refusal Elimination Score
+
+The RES combines three components:
+
+- **Projection reduction**: how much the refusal direction projection decreased relative to the unmodified model
+- **Signal separation**: whether harmful and harmless activations are now indistinguishable (they should be if refusal information is gone)
+- **Layer coverage**: whether elimination is consistent across all layers, not just the directly modified ones
+
+| RES range | Interpretation |
+|-----------|----------------|
+| 0.9 – 1.0 | Excellent — refusal signal comprehensively eliminated |
+| 0.7 – 0.9 | Good — minor residual in a small number of layers |
+| 0.5 – 0.7 | Partial — signal persists in multiple layers; consider additional passes |
+| < 0.5 | Incomplete — substantial residual; the model may still refuse |
+
+<Warning>
+A high RES does not guarantee zero refusal rate — the model may develop new refusal pathways orthogonal to the original directions. Always verify with the Evaluation Suite's `refusal_rate` metric after abliteration.
+</Warning>
+
+## Layer-wise signal interpretation
+
+Before obliteration, the per-layer probe reveals *where* refusal signal is concentrated:
+
+- **Strong early layers** (first 25%): instruction comprehension — the model identifies the prompt as harmful very early
+- **Strong middle layers** (25–75%): harm assessment — where the refusal *decision* is made; these are typically the highest-value layers to target
+- **Strong late layers** (75–100%): refusal token generation — these layers output the refusal language itself
+
+Post-obliteration, `layers_with_residual` shows which layers still carry signal and may warrant additional targeted passes.

@@ -1,0 +1,145 @@
+---
+title: "Advanced Method (Default)"
+description: "The recommended default — 4 SVD directions with norm-preserving projection, bias projection, and 2 refinement passes."
+---
+
+The `advanced` method is the default for `obliteratus obliterate`. It extracts four refusal directions per layer via SVD, applies norm-preserving biprojection, projects bias vectors, and runs two iterative refinement passes. It consistently produces the best balance of refusal removal and capability preservation across model families.
+
+## Why it's the default
+
+The `basic` method's single-direction approach works when refusal is linearly concentrated. In practice, most instruction-tuned models have at least some polyhedral structure to their refusal subspace — multiple distinct mechanisms (e.g. violence refusal vs. illegal content refusal vs. privacy refusal) that each contribute a separate direction. Four SVD directions is enough to capture the principal components of that subspace without over-ablating.
+
+On top of multi-direction extraction, `advanced` adds three improvements over `basic` that each independently reduce capability drift:
+
+1. **Norm-preserving biprojection**: restores each weight matrix's Frobenius norm after projection
+2. **Bias term projection**: removes the refusal component from bias vectors (`.bias`), which other tools leave intact
+3. **2 iterative refinement passes**: re-probes the model after the first pass to catch directions that rotated into adjacent subspaces
+
+**Method configuration from source:**
+
+```python
+"advanced": {
+    "n_directions": 4,
+    "direction_method": "svd",
+    "norm_preserve": True,
+    "regularization": 0.3,
+    "embed_regularization": 0.5,
+    "refinement_passes": 2,
+    "project_biases": True,
+    "use_chat_template": True,
+    "use_whitened_svd": False,
+    "true_iterative_refinement": False,
+    "layer_adaptive_strength": True,
+}
+```
+
+## Key features
+
+### SVD multi-direction extraction
+
+Instead of a single difference-in-means vector, `advanced` stacks the per-prompt activation differences into a matrix and computes the top-4 right singular vectors via `torch.linalg.svd`. These four vectors span the principal refusal subspace:
+
+```python
+diff_matrix = harmful_stack - harmless_stack  # (n_prompts, hidden_dim)
+U, S, Vh = torch.linalg.svd(diff_matrix, full_matrices=False)
+subspace = Vh[:4]  # top-4 right singular vectors
+```
+
+Based on [Gabliteration (arXiv:2512.18901)](https://arxiv.org/abs/2512.18901).
+
+### Norm-preserving biprojection
+
+After projecting out the refusal subspace from a weight matrix `W`, the remaining matrix has a smaller Frobenius norm. `advanced` captures the original norm before projection and rescales the result:
+
+```python
+original_norm = W.norm()
+W_new = W - W @ V^T @ V   # project out subspace V
+new_norm = W_new.norm()
+if new_norm > 0:
+    W_new = W_new * (original_norm / new_norm)  # restore norm
+```
+
+This prevents the scale drift that causes coherence degradation in `basic`. The `_MAX_NORM_RATIO` guard (1.10) limits amplification to at most 10% per projection step. Based on [grimjim's norm-preserving biprojection (2025)](https://huggingface.co/grimjim).
+
+### Bias term projection
+
+With `project_biases=True`, `advanced` also projects the refusal direction out of each layer's bias vectors. Most abliteration tools only modify the weight matrices and leave bias vectors untouched, which means the model retains partial refusal signal through the additive bias pathway. `advanced` closes this gap.
+
+### 2 iterative refinement passes
+
+`refinement_passes=2` means the PROBE → DISTILL → EXCISE sequence runs twice. After the first excision, some refusal signal may have rotated into adjacent directions that weren't captured in the first extraction. The second pass re-probes the modified model, finds the residual directions, and projects them out.
+
+<Note>
+  `true_iterative_refinement=False` in `advanced` means the second pass uses the original activation means rather than re-running the full activation collection from scratch. This is faster. `aggressive` sets `true_iterative_refinement=True` to fully re-probe between passes, which is more thorough but slower.
+</Note>
+
+## CLI usage
+
+```bash
+# Default — advanced is used automatically
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct
+
+# Explicit
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct --method advanced
+
+# With output dir and community contribution
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct \
+    --method advanced \
+    --output-dir ./liberated \
+    --contribute --contribute-notes "A100 80GB"
+
+# Override number of directions and passes
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct \
+    --method advanced \
+    --n-directions 6 \
+    --refinement-passes 3
+```
+
+## Python API usage
+
+```python
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",
+    output_dir="abliterated",
+)
+result_path = pipeline.run()
+
+# Access intermediate artifacts
+directions = pipeline.refusal_directions      # {layer_idx: tensor(hidden_dim)}
+subspaces  = pipeline.refusal_subspaces       # {layer_idx: tensor(4, hidden_dim)}
+strong_layers = pipeline._strong_layers       # layers selected for projection
+metrics = pipeline._quality_metrics
+# {
+#   'perplexity': 11.2,
+#   'coherence': 0.94,
+#   'refusal_rate': 0.04,
+#   'kl_divergence': 0.12,
+# }
+
+# Override individual parameters
+pipeline2 = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",
+    n_directions=6,           # override preset's 4
+    refinement_passes=3,      # override preset's 2
+    output_dir="abliterated_tuned",
+)
+```
+
+## Output metrics to expect
+
+Typical ranges on a 7-8B instruct model with `advanced`:
+
+| Metric | Expected range |
+|--------|----------------|
+| Refusal rate | 0.02 – 0.10 |
+| Perplexity delta vs baseline | +0.2 – +1.5 |
+| KL divergence | 0.08 – 0.25 |
+| Coherence | 0.90 – 0.96 |
+
+<Tip>
+  If `refusal_rate` is still above 0.10 after `advanced`, the model likely has a polyhedral or highly distributed refusal structure. Try `surgical` (for MoE architectures) or `optimized` (for auto-tuned removal on dense models).
+</Tip>

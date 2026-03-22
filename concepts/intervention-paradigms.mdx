@@ -1,0 +1,357 @@
+---
+title: "Intervention Paradigms"
+description: "Permanent weight projection vs. reversible steering vectors — understand the two ways to remove refusal behaviors."
+---
+
+OBLITERATUS supports two fundamentally different ways to intervene on a model's refusal behavior. They differ in permanence, mechanism, and use case — but both target the same refusal directions identified during the PROBE and DISTILL stages.
+
+<CardGroup cols={2}>
+  <Card title="Weight Projection" icon="scissors">
+    Permanent. Modifies the model's weight matrices by projecting out the refusal direction. Survives model save and reload. No runtime overhead after modification.
+  </Card>
+  <Card title="Steering Vectors" icon="sliders">
+    Reversible. Adds scaled direction vectors to residual stream activations at inference time via PyTorch hooks. No weight modification. Removable between requests.
+  </Card>
+</CardGroup>
+
+---
+
+## Paradigm 1: Weight projection (permanent)
+
+Weight projection modifies the model's weight matrices once, before inference. The modification is permanent in the sense that it persists across save/reload cycles — the modified model is a drop-in replacement for the original with no runtime overhead.
+
+### Core projection operation
+
+For a weight matrix $\mathbf{W}$ and refusal directions $\{\mathbf{r}_1, \ldots, \mathbf{r}_k\}$, the projection is:
+
+$$\mathbf{W}' = \mathbf{W} - \sum_{i=1}^k (1-\lambda)\, \mathbf{W}\mathbf{r}_i\mathbf{r}_i^\top$$
+
+This removes the component of $\mathbf{W}$ that acts along each refusal direction. When directions are orthonormal (standard SVD), the sum is equivalent to projecting out the full $k$-dimensional refusal subspace. When using whitened SVD, Gram-Schmidt re-orthonormalization is applied between rank-1 updates.
+
+For architectures that store weights transposed (e.g., GPT-2 Conv1D):
+
+$$\mathbf{W}' = \mathbf{W} - (1-\lambda)\, \mathbf{r}\mathbf{r}^\top \mathbf{W}$$
+
+### Norm-preserving rescaling
+
+Projection removes energy from the weight matrix, reducing its Frobenius norm. Without correction, this creates cascading magnitude drift through downstream LayerNorm layers. After each projection, OBLITERATUS rescales to restore the original norm:
+
+$$\mathbf{W}'' = \mathbf{W}' \cdot \frac{\|\mathbf{W}\|_F}{\|\mathbf{W}'\|_F}$$
+
+Norm amplification is capped at 1.10 per step to prevent pathological rescaling when removing directions from near-degenerate matrices (controlled by `_MAX_NORM_RATIO = 1.10`).
+
+### Bias term projection
+
+Attention and MLP layers often have bias vectors that carry non-trivial projections onto the refusal direction. OBLITERATUS projects these out separately:
+
+$$\mathbf{b}' = \mathbf{b} - (\mathbf{b} \cdot \mathbf{r})\, \mathbf{r}$$
+
+Enabled with `project_biases=True` (on by default in `advanced` and all stronger presets).
+
+<Warning>
+Other tools that modify only weight matrices miss the refusal signal in biases. This leaves refusal pathways partially active and is a common cause of incomplete abliteration.
+</Warning>
+
+### Iterative refinement
+
+A single projection pass can miss refusal directions that rotate into adjacent subspaces when the primary direction is removed. Iterative refinement runs multiple passes:
+
+- **Non-iterative** (`true_iterative_refinement=False`): Re-applies the same extracted directions $n$ times. Cheaper but may miss rotated residual directions.
+- **True iterative** (`true_iterative_refinement=True`): Re-probes the model after each pass to extract fresh residual directions. Catches rotated refusal but requires full activation collection between passes.
+
+A cosine-similarity early-exit short-circuits unnecessary passes: if all strong-layer directions have cosine similarity > 0.99 with the previous pass, re-probing is skipped.
+
+### Per-component scaling
+
+MLP layers and attention layers differ in sensitivity. OBLITERATUS supports separate projection strengths:
+
+```python
+# Bayesian optimizer sets these from empirical measurement
+pipeline._bayesian_attn_scale = 0.85   # gentler for attention
+pipeline._bayesian_mlp_scale  = 0.95   # more aggressive for MLP
+```
+
+MLP layers are generally more sensitive: they store factual knowledge, and over-projection degrades coherence faster than equivalent projection on attention layers.
+
+### Layer-adaptive strength
+
+Rather than applying uniform regularization, OBLITERATUS modulates projection strength per-layer based on the refusal signal norm:
+
+$$w_l = \sqrt{\frac{\|\mathbf{r}_l\|}{\max_j \|\mathbf{r}_j\|}}$$
+
+Layers with stronger refusal signal get heavier projection; layers near the periphery of the selection receive lighter projection. The square-root mapping produces a smoother gradient than linear scaling, avoiding catastrophic removal of capability-relevant signal in weak-refusal layers.
+
+### Method presets
+
+Seven presets, escalating in thoroughness:
+
+| Method | Directions | Extraction | Norm-pres. | Bias | Passes | Special |
+|--------|-----------|-----------|-----------|------|--------|----------|
+| `basic` | 1 | Diff-means | No | No | 1 | Baseline (Arditi et al.) |
+| `advanced` | 4 | SVD | Yes | Yes | 2 | Default. Layer-adaptive. |
+| `aggressive` | 8 | Whitened SVD | Yes | Yes | 3 | Jailbreak-contrast, head surgery, winsorized |
+| `surgical` | 8 | Whitened SVD | Yes | Yes | 2 | EGA, SAE features, MoE-aware |
+| `optimized` | 4 | SVD | Yes | Yes | 1 | Bayesian TPE, KL co-opt, CoT-aware |
+| `inverted` | 8 | SVD | Yes | Yes | 2 | Reflection (2× instead of removal) |
+| `nuclear` | 4 | Whitened SVD | Yes | Yes | 2 | All techniques + steering cleanup |
+
+### Full example
+
+```python
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",
+    output_dir="abliterated",
+    # Override specific parameters
+    n_directions=6,           # more directions than the preset default
+    refinement_passes=3,      # extra passes
+    project_biases=True,
+    norm_preserve=True,
+    layer_adaptive_strength=True,
+    true_iterative_refinement=True,
+)
+result_path = pipeline.run()
+
+# Quality metrics from VERIFY stage
+print(pipeline._quality_metrics)
+# {'perplexity': 12.3, 'refusal_rate': 0.04, 'kl_divergence': 0.18, ...}
+```
+
+---
+
+## Paradigm 2: Steering vectors (reversible)
+
+Steering vectors modify model behavior at inference time without touching any weights. A scaled direction vector is added to the residual stream at specified layers via PyTorch forward hooks:
+
+$$\mathbf{x}_l' = \mathbf{x}_l + \alpha \cdot \mathbf{s}$$
+
+where $\alpha$ is the steering strength and $\mathbf{s}$ is the steering vector. Setting $\alpha < 0$ moves the residual stream *away* from refusal; $\alpha > 0$ reinforces it.
+
+Based on Turner et al. (2023) "Activation Addition" and Rimsky et al. (2024) "Steering Llama 2 via Contrastive Activation Addition".
+
+### SteeringVectorFactory
+
+The factory creates steering vectors from three sources:
+
+<Tabs>
+  <Tab title="From refusal direction">
+    ```python
+    from obliteratus.analysis.steering_vectors import SteeringVectorFactory
+
+    # Create from a pre-computed refusal direction
+    # alpha=-1.0 steers AWAY from refusal (default)
+    # alpha=+1.0 reinforces refusal
+    vec = SteeringVectorFactory.from_refusal_direction(
+        refusal_direction=pipeline.refusal_directions[layer_idx],
+        source_layer=layer_idx,
+        alpha=-1.0,
+    )
+    ```
+  </Tab>
+  <Tab title="From contrastive pairs">
+    ```python
+    from obliteratus.analysis.steering_vectors import SteeringVectorFactory
+
+    # Create from raw activation pairs — computes mean difference internally
+    # vector = mean(positive_acts) - mean(negative_acts)
+    vec = SteeringVectorFactory.from_contrastive_pairs(
+        positive_activations=harmful_acts[layer_idx],    # acts that trigger refusal
+        negative_activations=harmless_acts[layer_idx],   # acts without refusal
+        label="refusal",
+        alpha=1.0,
+    )
+    ```
+  </Tab>
+  <Tab title="Combined">
+    ```python
+    from obliteratus.analysis.steering_vectors import SteeringVectorFactory
+
+    # Combine multiple steering vectors with weights
+    vec_a = SteeringVectorFactory.from_refusal_direction(dir_a, alpha=-1.0)
+    vec_b = SteeringVectorFactory.from_refusal_direction(dir_b, alpha=-0.5)
+
+    combined = SteeringVectorFactory.combine(
+        vectors=[vec_a, vec_b],
+        weights=[0.7, 0.3],
+        label="combined_refusal",
+    )
+    ```
+  </Tab>
+</Tabs>
+
+### SteeringHookManager
+
+The hook manager installs and removes steering hooks on the live model:
+
+```python
+from obliteratus.analysis import SteeringVectorFactory, SteeringHookManager
+from obliteratus.analysis.steering_vectors import SteeringConfig
+
+# Build steering vector from pipeline's extracted direction
+vec = SteeringVectorFactory.from_refusal_direction(
+    pipeline.refusal_directions[15],
+    source_layer=15,
+    alpha=-1.0,
+)
+
+# Configure: steer at layers 10–15, global alpha=1.0
+config = SteeringConfig(
+    vectors=[vec],
+    target_layers=[10, 11, 12, 13, 14, 15],
+    alpha=1.0,
+    position="all",     # steer at all sequence positions
+    normalize=True,     # normalize to unit vector before scaling
+)
+
+# Install hooks
+manager = SteeringHookManager()
+result = manager.install(model, config)
+print(f"Hooks installed on {result.hooks_installed} layers")
+
+# Generate with steering active — hooks fire on every forward pass
+output = model.generate(input_ids)
+
+# Remove steering — model returns to original behavior
+manager.remove()
+```
+
+### Alpha parameter
+
+The `alpha` parameter controls steering strength. It is multiplicative with the vector's `default_alpha`:
+
+$$\text{scale} = \alpha_{\text{global}} \times \alpha_{\text{default}}$$
+
+- `default_alpha=-1.0` in `from_refusal_direction` means the vector steers *away* from refusal.
+- Setting `config.alpha=2.0` doubles the steering strength at all target layers.
+- Per-layer overrides via `config.per_layer_alpha = {12: 1.5, 15: 0.8}` apply different strengths at specific layers.
+
+<Tip>
+For refusal removal, start with `alpha=1.0` and the factory default `default_alpha=-1.0`. If refusal persists, increase `alpha` incrementally. Values above 3.0 tend to degrade coherence.
+</Tip>
+
+### Position modes
+
+The `position` parameter in `SteeringConfig` controls which token positions receive the steering:
+
+| Mode | Behavior | Use case |
+|------|----------|----------|
+| `"all"` | Add steering to every position | Strongest effect |
+| `"last"` | Only the last token position | Targeted — matches how refusal direction is extracted |
+| `"first"` | Only the first token position | Prefix steering |
+
+### Composability
+
+Multiple steering vectors can be active simultaneously across different layers. Each `SteeringConfig` carries its own list of vectors, and each hook adds all vectors in that list:
+
+```python
+# Steer away from refusal at middle layers
+vec_refusal = SteeringVectorFactory.from_refusal_direction(
+    direction=pipeline.refusal_directions[12],
+    alpha=-1.0,
+)
+
+# Also steer toward helpfulness at output layers
+vec_helpful = SteeringVectorFactory.from_contrastive_pairs(
+    positive_activations=helpful_acts[28],
+    negative_activations=unhelpful_acts[28],
+    label="helpfulness",
+    alpha=0.5,
+)
+
+config = SteeringConfig(
+    vectors=[vec_refusal, vec_helpful],
+    target_layers=[10, 11, 12, 13, 28, 29, 30],
+    per_layer_alpha={28: 0.8, 29: 0.8, 30: 0.8},  # gentler at output layers
+)
+manager = SteeringHookManager()
+manager.install(model, config)
+```
+
+---
+
+## Choosing between paradigms
+
+<AccordionGroup>
+  <Accordion title="Use weight projection when...">
+    - You want a modified model that behaves consistently without runtime hooks
+    - You are saving and distributing the model
+    - You want zero inference overhead
+    - You need the modification to be permanent across sessions
+    - You are running large-scale inference and cannot afford hook overhead
+  </Accordion>
+
+  <Accordion title="Use steering vectors when...">
+    - You want to experiment with different strengths without re-running the pipeline
+    - You need per-request control (some requests steered, others not)
+    - You want reversibility — ability to undo the modification without reloading weights
+    - You are building a system that needs runtime behavioral control
+    - You want to compose multiple behavioral modifications
+  </Accordion>
+
+  <Accordion title="Use LoRA-based ablation when...">
+    - You want the benefits of weight projection (persistence, no inference overhead after merge)
+    - But you also want the option to revert (unmerge the LoRA adapters)
+    - You need the modification to be serializable as a separate adapter file
+  </Accordion>
+</AccordionGroup>
+
+### Decision guide
+
+| Requirement | Weight projection | Steering vectors | LoRA ablation |
+|-------------|-----------------|-----------------|---------------|
+| Persistent across reload | Yes | No | Yes (merged) / No (unmerged) |
+| Zero inference overhead | Yes | No | Yes (merged) |
+| Reversible | No | Yes | Yes (unmerged) |
+| Tunable strength at runtime | No | Yes | No |
+| Composable with other modifications | No | Yes | Partially |
+| Distributable as HuggingFace model | Yes | No | Yes (adapter) |
+
+---
+
+## LoRA-based reversible ablation
+
+As a third option, OBLITERATUS implements ablation via rank-1 LoRA adapters — the approach pioneered by Heretic (p-e-w, 2025). Instead of modifying base weights in-place, the ablation is expressed as:
+
+$$\Delta \mathbf{W} = -\lambda \cdot \mathbf{v} \cdot (\mathbf{v}^\top \mathbf{W})$$
+
+This is mathematically equivalent to the direct projection $\mathbf{W}' = \mathbf{W} + \Delta\mathbf{W}$ when merged. The key advantage: keeping $\Delta\mathbf{W}$ as a separate adapter means it can be unmerged and the original weights restored.
+
+```python
+# Enable LoRA-based ablation in the pipeline
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="optimized",
+    use_lora_ablation=True,
+    lora_rank=1,              # rank-1 = single direction per layer
+)
+pipeline.run()
+
+# The _lora_adapters dict holds the unmerged adapters
+# {"layer_name": (A_tensor, B_tensor)} where W' = W + B @ A
+print(f"LoRA adapters: {len(pipeline._lora_adapters)} layers")
+```
+
+LoRA-based ablation is the recommended approach for the `optimized` preset when using Bayesian hyperparameter search, since the optimizer needs to evaluate many candidate projection strengths without committing to any one configuration permanently.
+
+---
+
+## Nuclear mode: combining both paradigms
+
+The `nuclear` method combines weight projection with activation steering for maximum effect on stubborn models:
+
+1. **Weight projection** (permanent): Removes the primary refusal directions from attention and MLP weight matrices with a tempered reflection strength (1.25× instead of 2×).
+2. **Activation steering** (post-excise cleanup): Installs lightweight steering hooks after excision to suppress any residual refusal signal that weight projection missed.
+
+The steering hooks remain active in the saved model and fire at inference time:
+
+```python
+pipeline = AbliterationPipeline(
+    model_name="your-model",
+    method="nuclear",
+    # Nuclear includes activation_steering=True, steering_strength=0.15
+)
+pipeline.run()
+# Both weight modification AND steering hooks are active in the output model
+```

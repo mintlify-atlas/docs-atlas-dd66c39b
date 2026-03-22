@@ -1,0 +1,152 @@
+---
+title: "Analysis Modules Overview"
+description: "15 modules for mechanistic interpretability of refusal directions in transformer models."
+---
+
+The analysis modules are the research core of OBLITERATUS. They map the precise geometric structure of refusal mechanisms — how many directions exist, which layers enforce them, how they'll behave after removal — so that obliteration can be surgical rather than brute-force.
+
+<Info>
+The `informed` pipeline uses four of these modules automatically to auto-configure every obliteration decision. You can also run any module standalone at any point in your workflow.
+</Info>
+
+## All 15 modules
+
+| Module | Question it answers | Based on |
+|--------|---------------------|----------|
+| **CrossLayerAlignmentAnalyzer** | How does the refusal direction evolve across layers? | Novel |
+| **RefusalLogitLens** | At which layer does the model "decide" to refuse? | nostalgebraist (2020) |
+| **WhitenedSVDExtractor** | What are the principal refusal directions after whitening? | Novel |
+| **ActivationProbe** | How much refusal signal exists at each layer? | Arditi et al. (2024) |
+| **DefenseRobustnessEvaluator** | Will the guardrails try to self-repair? (Ouroboros effect) | Novel |
+| **ConceptConeAnalyzer** | Is there one mechanism or many? Do categories share guardrails? | Wollschlager et al. (2025) |
+| **AlignmentImprintDetector** | Was this model trained with DPO, RLHF, CAI, or SFT? | Novel |
+| **MultiTokenPositionAnalyzer** | Where in the sequence does refusal signal concentrate? | Novel |
+| **SparseDirectionSurgeon** | Which specific weight rows carry the most refusal? | Novel |
+| **CausalRefusalTracer** | Which components are causally necessary for refusal? | Meng et al. (2022) approx. |
+| **ResidualStreamDecomposer** | How much refusal comes from attention vs. MLP? | Elhage et al. (2021) |
+| **LinearRefusalProbe** | Can a learned classifier find refusal info the analytical direction misses? | Alain & Bengio (2017) |
+| **TransferAnalyzer** | Are guardrails universal or model-specific? (Universality Index) | Novel |
+| **SteeringVectorFactory** / **SteeringHookManager** | Can we disable guardrails at inference time without touching weights? | Turner et al. (2023), Rimsky et al. (2024) |
+| **Evaluation Suite** | Refusal rate, perplexity, coherence, KL divergence, CKA, effective rank | Multiple |
+
+## Import pattern
+
+```python
+from obliteratus.analysis import (
+    CrossLayerAlignmentAnalyzer,
+    RefusalLogitLens,
+    WhitenedSVDExtractor,
+    ActivationProbe,
+    DefenseRobustnessEvaluator,
+    ConceptConeAnalyzer,
+    AlignmentImprintDetector,
+    MultiTokenPositionAnalyzer,
+    SparseDirectionSurgeon,
+    CausalRefusalTracer,
+    ResidualStreamDecomposer,
+    LinearRefusalProbe,
+    TransferAnalyzer,
+    SteeringVectorFactory,
+    SteeringHookManager,
+)
+```
+
+## Using analysis modules
+
+<Tabs>
+  <Tab title="Standalone">
+    Run any module independently against a model you've already loaded and probed. Useful for exploring a specific aspect of a model's refusal geometry before deciding on a removal strategy.
+
+    ```python
+    from obliteratus.abliterate import AbliterationPipeline
+    from obliteratus.analysis import CrossLayerAlignmentAnalyzer
+
+    # Run the pipeline through PROBE only to get refusal directions
+    pipeline = AbliterationPipeline(
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        method="advanced",
+    )
+    pipeline._summon()
+    pipeline._probe()
+
+    # Now run analysis on the extracted directions
+    analyzer = CrossLayerAlignmentAnalyzer(cluster_threshold=0.85)
+    result = analyzer.analyze(pipeline.refusal_directions)
+
+    print(f"Cluster count: {result.cluster_count}")
+    print(f"Persistence score: {result.direction_persistence_score:.3f}")
+    ```
+  </Tab>
+  <Tab title="Informed pipeline">
+    Use `InformedAbliterationPipeline` to have analysis auto-configure every obliteration parameter. The ANALYZE stage runs four modules and feeds their outputs directly into DISTILL and EXCISE.
+
+    ```python
+    from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+    pipeline = InformedAbliterationPipeline(
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        output_dir="abliterated_informed",
+    )
+    output_path, report = pipeline.run_informed()
+
+    # Report contains all analysis outputs
+    print(f"Alignment method: {report.insights.detected_alignment_method}")
+    print(f"Directions used: {report.insights.recommended_n_directions}")
+    print(f"Ouroboros passes: {report.ouroboros_passes}")
+    ```
+  </Tab>
+</Tabs>
+
+## When to run analysis
+
+<AccordionGroup>
+  <Accordion title="Before obliteration: understanding the target">
+    Run analysis first when you need to make informed decisions about which method to use, or when you're working with an unfamiliar model family. The four most valuable pre-obliteration analyses are:
+
+    1. **AlignmentImprintDetector** — identifies the training method (DPO/RLHF/CAI/SFT) to select optimal regularization
+    2. **ConceptConeAnalyzer** — determines how many directions to extract (1 for linear refusal, up to 8 for polyhedral)
+    3. **CrossLayerAlignmentAnalyzer** — finds layer clusters so you target the right layers
+    4. **DefenseRobustnessEvaluator** — predicts self-repair risk so you know how many passes to run
+  </Accordion>
+  <Accordion title="As part of the informed pipeline">
+    The `informed` method runs these four modules automatically during ANALYZE, then feeds results downstream. This is the recommended path for production use — analysis and obliteration happen in a single pass with no manual configuration required.
+
+    The pipeline stages that benefit from analysis outputs:
+
+    | Analysis output | Configures |
+    |----------------|------------|
+    | Detected alignment method | Regularization strength, projection aggressiveness |
+    | Cone dimensionality | Number of SVD directions to extract |
+    | Layer clusters | Which layers to target (cluster-aware, not arbitrary top-k) |
+    | Self-repair probability | Number of refinement passes, layer skip gates |
+  </Accordion>
+  <Accordion title="After obliteration: verification">
+    **ActivationProbe** is specifically designed for post-obliteration verification. It measures whether the refusal direction was actually eliminated from activations, or whether it persists in layers that weren't directly modified. Use it after any obliteration run to get the Refusal Elimination Score (RES).
+  </Accordion>
+</AccordionGroup>
+
+## Documented modules
+
+<CardGroup cols={2}>
+  <Card title="Cross-Layer Alignment" href="/analysis/cross-layer-alignment">
+    Map how refusal direction evolves across transformer layers. Identifies direction clusters and persistence score.
+  </Card>
+  <Card title="Activation Probing" href="/analysis/activation-probing">
+    Measure refusal signal strength at each layer. Computes the Refusal Elimination Score (RES) for post-obliteration verification.
+  </Card>
+  <Card title="Concept Cone Geometry" href="/analysis/concept-cone-geometry">
+    Map the geometric structure of refusal — how many distinct mechanisms exist, per-category directions, Direction Specificity Index.
+  </Card>
+  <Card title="Alignment Imprint Detection" href="/analysis/alignment-imprint">
+    Fingerprint a model's alignment training method (DPO, RLHF, CAI, SFT) from subspace geometry.
+  </Card>
+  <Card title="Defense Robustness" href="/analysis/defense-robustness">
+    Predict whether guardrails will self-repair after removal — the Ouroboros effect.
+  </Card>
+  <Card title="Steering Vectors" href="/analysis/steering-vectors">
+    Apply inference-time behavioral steering without modifying model weights.
+  </Card>
+  <Card title="Evaluation Suite" href="/analysis/evaluation-suite">
+    Measure obliteration quality: refusal rate, perplexity, coherence, KL divergence, CKA, effective rank.
+  </Card>
+</CardGroup>

@@ -1,0 +1,284 @@
+---
+title: "Ablation Strategies"
+description: "Four ablation strategies for systematically mapping transformer internals — layer removal, head pruning, FFN ablation, and embedding ablation."
+---
+
+Ablation studies are the core diagnostic tool in OBLITERATUS: systematically knock out one model component at a time, measure what breaks, and build a complete map of where specific behaviors live inside the transformer. Apply → evaluate → restore → repeat — for every layer, every attention head, every FFN block, and every embedding dimension range.
+
+The result is not a single number, but a ranked map: which components are load-bearing, which are redundant, and — when compared between a base model and its RLHF-tuned counterpart — which specific components encode the refusal behavior you want to locate or remove.
+
+## The four strategies
+
+<CardGroup cols={2}>
+  <Card title="layer_removal" icon="layer-group">
+    Zeros all parameters in one complete transformer layer. Measures how much overall capability depends on that layer.
+  </Card>
+  <Card title="head_pruning" icon="scissors">
+    Zeros the Q/K/V and output projection weights for one attention head. Locates which heads are part of behavioral circuits.
+  </Card>
+  <Card title="ffn_ablation" icon="database">
+    Zeros all weights in the MLP/FFN block of one layer. Identifies where factual knowledge is stored.
+  </Card>
+  <Card title="embedding_ablation" icon="grip-dots">
+    Zeros a contiguous range of embedding dimensions. Analyzes the structure of the representation space.
+  </Card>
+</CardGroup>
+
+---
+
+## Strategy details
+
+<AccordionGroup>
+  <Accordion title="layer_removal — remove an entire transformer layer">
+    **What it does:** Sets all parameters (weights and biases) of a complete transformer layer to zero. The layer remains in the computation graph but becomes effectively a pass-through — input residual flows straight through unchanged.
+
+    This is a "soft" removal. The layer is not physically deleted from the module list, so the forward pass still executes the same number of operations. For each ablation, the model is evaluated, then the original weights are restored before the next layer is tested.
+
+    **Enumeration:** One `AblationSpec` per layer, named `layer_0`, `layer_1`, … `layer_N-1`.
+
+    **Use case:** Identify which layers matter most to overall model capability. Layers that cause a large perplexity increase when removed are load-bearing; layers with minimal impact may be candidates for model compression or may be the location of behaviorally-specific circuits (e.g., refusal).
+
+    **What to look for:** Plot perplexity delta per layer — early and late layers typically matter more than middle layers. When comparing a base vs. instruct model, layers where the delta diverges between the two are where alignment fine-tuning was most active.
+  </Accordion>
+
+  <Accordion title="head_pruning — zero individual attention heads">
+    **What it does:** Zeros the Q/K/V projection weights and the corresponding output projection slice for a single attention head, leaving all other heads in the same layer intact.
+
+    Handles both fused attention layouts (GPT-2's `c_attn` Conv1D, where Q/K/V are packed into a single weight matrix) and separate projection layouts (LLaMA, Mistral, Falcon's `q_proj`/`k_proj`/`v_proj`/`o_proj`). The correct approach is auto-detected from the model architecture.
+
+    **Enumeration:** One `AblationSpec` per (layer, head) pair, named `layer_0_head_0`, `layer_0_head_1`, … `layer_N-1_head_H-1`. Total specs = `num_layers × num_heads`.
+
+    **Use case:** Locate behavioral circuits. Mechanistic interpretability research (Arditi et al., 2024) has shown that refusal behaviors in instruct-tuned models are often mediated by a small number of attention heads. Pruning every head individually lets you rank them by importance and identify the specific heads in the refusal circuit.
+
+    **What to look for:** Most heads are redundant — their removal has near-zero impact. A small number (sometimes a single head) will cause a sharp perplexity spike when ablated. Cross-reference with the `jailbreak` or `guardrail` presets using a safety-probing dataset to find heads that specifically mediate refusal vs. general capability.
+  </Accordion>
+
+  <Accordion title="ffn_ablation — zero feed-forward blocks">
+    **What it does:** Zeros all parameters in the MLP/FFN sub-block of a specific transformer layer. The attention sub-block in that layer is left intact.
+
+    **Enumeration:** One `AblationSpec` per layer, named `ffn_layer_0`, `ffn_layer_1`, … `ffn_layer_N-1`.
+
+    **Use case:** Find where factual knowledge is stored. The "key-value memory" hypothesis (Geva et al.) treats FFN weight matrices as associative memories — each FFN block stores factual associations that are retrieved during the forward pass. Ablating FFN blocks is the most direct way to probe where specific knowledge (or specific trained behaviors) is concentrated.
+
+    **What to look for:** Combine with a domain-specific evaluation dataset (not just wikitext perplexity) to find which FFN layers encode the knowledge domain you care about. For refusal research, compare the FFN impact profile of a base model vs. its RLHF fine-tune — the layers that diverge most are where alignment training injected refusal knowledge.
+  </Accordion>
+
+  <Accordion title="embedding_ablation — zero embedding dimension ranges">
+    **What it does:** Zeros a contiguous chunk of dimensions in the token embedding matrix. The chunk width is controlled by `chunk_size`. For a model with hidden dimension `d_model`, the default chunk size is `max(1, d_model // 16)`, producing 16 chunks of roughly equal width.
+
+    **Enumeration:** One `AblationSpec` per chunk, named `embed_dims_0_48`, `embed_dims_48_96`, etc. (using `chunk_size=48` as an example). Total specs = `ceil(d_model / chunk_size)`.
+
+    **Key parameter — `chunk_size`:**
+    - Smaller values (e.g., `16`) → more granular analysis, more ablations, slower
+    - Larger values (e.g., `64`) → coarser analysis, fewer ablations, faster
+    - The `jailbreak` preset uses `chunk_size: 16` for maximum resolution
+    - The `full` preset uses `chunk_size: 48`
+    - The `guardrail` preset uses `chunk_size: 24`
+
+    **Use case:** Analyze the structure of the representation space. Token embeddings are the model's first interface with the input — the dimensions that matter most here reveal what the model uses to distinguish token types, topics, and tones. For refusal research, dimensions that spike in impact when ablated on safety prompts (but not neutral prompts) are part of the refusal-relevant embedding subspace.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## How strategies work: enumerate → apply → restore
+
+Every strategy follows the same three-step loop:
+
+```
+1. enumerate(handle)  →  produce a list of AblationSpecs (one per component)
+2. apply(handle, spec)  →  zero out the component weights in-place
+3. evaluate()  →  run the dataset through the model, compute metrics
+4. handle.restore()  →  restore original weights before next ablation
+```
+
+The model is never permanently modified during a study. Each ablation is applied, measured, and reverted. The original weights are saved before the first ablation and restored after each one.
+
+---
+
+## YAML configuration
+
+Strategies are declared in the `strategies` list of a study YAML. Each entry specifies the strategy name and optional `params`:
+
+```yaml
+strategies:
+  - name: layer_removal
+    # no params — uses all layers by default
+
+  - name: head_pruning
+    # no params — ablates every head in every layer
+
+  - name: ffn_ablation
+    # no params — ablates FFN in every layer
+
+  - name: embedding_ablation
+    params:
+      chunk_size: 48  # ablate 48 embedding dims at a time
+```
+
+A complete study config with all four strategies:
+
+```yaml
+model:
+  name: meta-llama/Llama-3.1-8B-Instruct
+  task: causal_lm
+  dtype: float16
+  device: cuda
+
+dataset:
+  name: wikitext
+  subset: wikitext-2-raw-v1
+  split: test
+  text_column: text
+  max_samples: 100
+
+strategies:
+  - name: layer_removal
+  - name: head_pruning
+  - name: ffn_ablation
+  - name: embedding_ablation
+    params:
+      chunk_size: 48
+
+metrics:
+  - perplexity
+
+batch_size: 4
+max_length: 256
+output_dir: results/llama_full
+```
+
+<Tip>
+  The `examples/` directory ships with ready-to-run YAML files: `gpt2_layer_ablation.yaml`, `gpt2_head_ablation.yaml`, and `full_study.yaml`. These are good starting points for adapting to your own model.
+</Tip>
+
+---
+
+## Python: strategy registry
+
+Strategies are registered via the `@register_strategy` decorator and looked up at runtime through `STRATEGY_REGISTRY`:
+
+```python
+from obliteratus.strategies.registry import STRATEGY_REGISTRY, get_strategy
+
+# List all registered strategies
+print(list(STRATEGY_REGISTRY.keys()))
+# ['embedding_ablation', 'ffn_ablation', 'head_pruning', 'layer_removal']
+
+# Instantiate a strategy by name
+strategy = get_strategy("head_pruning")
+
+# Enumerate all ablation specs for a loaded model
+from obliteratus.models.loader import load_model
+handle = load_model("openai-community/gpt2", task="causal_lm")
+specs = strategy.enumerate(handle)
+print(f"{len(specs)} head ablations for GPT-2")
+# 144 head ablations for GPT-2  (12 layers × 12 heads)
+```
+
+To apply and restore manually:
+
+```python
+from obliteratus.strategies import get_strategy
+
+strategy = get_strategy("layer_removal")
+specs = strategy.enumerate(handle)
+
+for spec in specs:
+    strategy.apply(handle, spec)
+    # ... run evaluation here ...
+    handle.restore()  # always restore before the next ablation
+```
+
+Or use the built-in `iterate` helper, which applies + restores around each spec automatically:
+
+```python
+for spec in strategy.iterate(handle):
+    metrics = evaluator.evaluate()
+    print(spec.component, metrics)
+    # handle.restore() is called automatically after each yield
+```
+
+---
+
+## CLI
+
+```bash
+# List all registered strategies with descriptions
+obliteratus strategies
+
+# Run a study with a specific strategy config
+obliteratus run my_study.yaml
+
+# Run one of the shipped examples directly
+obliteratus run examples/gpt2_layer_ablation.yaml
+obliteratus run examples/full_study.yaml
+```
+
+---
+
+## Output: results.json
+
+Every run writes `results.json` (plus `results.csv` and plots) to the configured `output_dir`. The JSON schema:
+
+```json
+{
+  "model_name": "openai-community/gpt2",
+  "baseline_metrics": {
+    "perplexity": 29.14
+  },
+  "results": [
+    {
+      "strategy": "layer_removal",
+      "component": "layer_3",
+      "description": "Zero-out all parameters of transformer layer 3",
+      "metrics": {
+        "perplexity": 41.87
+      },
+      "metadata": {
+        "layer_idx": 3
+      }
+    },
+    {
+      "strategy": "head_pruning",
+      "component": "layer_2_head_5",
+      "description": "Zero-out attention head 5 in layer 2",
+      "metrics": {
+        "perplexity": 30.02
+      },
+      "metadata": {
+        "layer_idx": 2,
+        "head_idx": 5
+      }
+    },
+    {
+      "strategy": "embedding_ablation",
+      "component": "embed_dims_0_48",
+      "description": "Zero-out embedding dimensions [0:48)",
+      "metrics": {
+        "perplexity": 58.91
+      },
+      "metadata": {
+        "dim_start": 0,
+        "dim_end": 48
+      }
+    }
+  ]
+}
+```
+
+Each entry in `results` contains:
+
+| Field | Description |
+|---|---|
+| `strategy` | Strategy name (`layer_removal`, `head_pruning`, `ffn_ablation`, `embedding_ablation`) |
+| `component` | Human-readable component identifier (e.g., `layer_3`, `layer_2_head_5`, `ffn_layer_7`, `embed_dims_48_96`) |
+| `description` | Full description of the ablation applied |
+| `metrics` | Dict of metric name → value after ablation (e.g., `{"perplexity": 41.87}`) |
+| `metadata` | Strategy-specific metadata: layer index, head index, dim range start/end |
+
+The `to_dataframe()` method on `AblationReport` automatically computes `{metric}_delta` and `{metric}_pct_change` columns against the baseline for downstream analysis.
+
+<Note>
+  Results are also saved as `results.csv` (one row per ablation) and rendered as two plots: `impact.png` (bar chart of metric delta per component) and `heatmap.png` (pct_change heatmap across all strategies and metrics).
+</Note>

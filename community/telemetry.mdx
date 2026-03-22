@@ -1,0 +1,256 @@
+---
+title: "Telemetry"
+description: "Opt-in, anonymous telemetry that contributes your run to the shared community research dataset."
+---
+
+Telemetry is **disabled by default**. When you opt in, each obliteration run appends a benchmark record to a local JSONL file and automatically syncs it to a central HuggingFace Dataset repo where it feeds the community leaderboard.
+
+<Note>
+On HuggingFace Spaces, telemetry is enabled by default so every person who clicks Obliterate on the public Space directly contributes to the community dataset without any extra steps.
+</Note>
+
+## What gets collected
+
+Every telemetry record contains the following fields — nothing more.
+
+### Model fields
+
+| Field | Type | Example |
+|---|---|---|
+| `model_id` | string | `"meta-llama/Llama-3.1-8B-Instruct"` |
+| `model_family` | string | `"llama"` |
+| `model_size_b` | float | `8.0` |
+| `is_moe` | bool | `false` |
+
+### Method fields
+
+| Field | Type | Example |
+|---|---|---|
+| `method` | string | `"advanced"` |
+| `n_directions` | int | `4` |
+| `norm_preserve` | bool | `true` |
+| `refinement_passes` | int | `2` |
+| `use_whitened_svd` | bool | `false` |
+| `use_bayesian` | bool | `false` |
+
+### Benchmark results
+
+| Field | Type | Description |
+|---|---|---|
+| `refusal_rate` | float | Fraction of prompts the model still refuses post-obliteration |
+| `perplexity` | float | Language modeling perplexity on a held-out set |
+| `coherence` | float | Semantic coherence score |
+| `kl_divergence` | float | KL divergence from the base model's output distribution |
+| `strong_layers` | int | Number of layers with strong refusal signal |
+| `ega_expert_dirs` | int | Expert directions (MoE models only) |
+| `time_seconds` | float | Wall-clock time for the full pipeline |
+
+### Hardware fields
+
+| Field | Type | Example |
+|---|---|---|
+| `gpu_name` | string | `"NVIDIA A100-SXM4-80GB"` |
+| `gpu_vram_gb` | float | `79.2` |
+| `quantization` | string \| null | `null` |
+
+### Identity fields
+
+| Field | Type | Description |
+|---|---|---|
+| `timestamp` | string | UTC ISO-8601 timestamp |
+| `session_id` | string | Random 12-character hex. Generated per process. **Not tied to user identity.** |
+
+## What is never collected
+
+<Warning>
+The following are **never collected, never stored, and never transmitted** — by design and by code:
+
+- Prompts or prompt text of any kind
+- Model outputs or generated text
+- IP addresses
+- User identity, usernames, or account information
+- File paths on your system
+- Any personally identifiable information
+</Warning>
+
+The `session_id` field is a random hash of `time.time() + random.random() + os.getpid()`. It is regenerated on every process start and cannot be traced back to a user or machine. You can read the exact generation logic in `obliteratus/telemetry.py`.
+
+## Schema v2: richer structured reports
+
+Beyond the flat `BenchmarkRecord`, the pipeline also generates schema v2 reports via `build_report()` that include deeper structural data:
+
+```python
+# Schema v2 report structure (from telemetry.py build_report)
+{
+    "schema_version": 2,
+    "session_id": "<random uuid hex>",
+    "timestamp": "2026-03-22T14:30:00+00:00",
+    "model": {
+        "architecture": "LlamaForCausalLM",
+        "num_layers": 32,
+        "num_heads": 32,
+        "hidden_size": 4096,
+        "total_params": 8030000000
+    },
+    "method": "advanced",
+    "method_config": {
+        "n_directions": 4,
+        "norm_preserve": true,
+        "refinement_passes": 2
+        # ... other config keys
+    },
+    "quality_metrics": {
+        "refusal_rate": 0.02,
+        "perplexity": 8.4,
+        "coherence": 0.91,
+        "kl_divergence": 0.15
+    },
+    "environment": {
+        "python_version": "3.11.9",
+        "os": "Linux",
+        "arch": "x86_64",
+        "torch_version": "2.4.0"
+    },
+    "direction_stats": { ... },
+    "excise_details": { ... },
+    "gpu_memory": {
+        "peak_allocated_gb": 42.1,
+        "peak_reserved_gb": 44.8
+    }
+}
+```
+
+For informed pipeline runs, the report also includes `analysis_insights` (detected alignment method, cone geometry, recommended directions) and `informed` extras (Ouroboros passes, final refusal rate).
+
+## How to enable telemetry
+
+<Steps>
+  <Step title="Per-run: the --contribute flag">
+    Add `--contribute` to any `obliteratus obliterate` command:
+
+    ```bash
+    obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct \
+        --method advanced \
+        --contribute
+    ```
+
+    Optionally add context about your setup with `--contribute-notes`:
+
+    ```bash
+    obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct \
+        --method advanced \
+        --contribute \
+        --contribute-notes "A100 80GB, default prompts"
+    ```
+
+    Notes are stored as free text in the `extra` field of the record. They help researchers contextualize results in aggregate — for example, whether a run used a non-default prompt set.
+  </Step>
+
+  <Step title="Globally: the environment variable">
+    Set `OBLITERATUS_TELEMETRY=1` to enable telemetry for every run in your shell session or environment:
+
+    ```bash
+    export OBLITERATUS_TELEMETRY=1
+
+    # Every subsequent run contributes automatically
+    obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct --method surgical
+    obliteratus obliterate mistralai/Mistral-7B-Instruct-v0.3 --method advanced
+    ```
+
+    To disable it again:
+
+    ```bash
+    export OBLITERATUS_TELEMETRY=0
+    ```
+  </Step>
+
+  <Step title="Python API: enable_telemetry() / disable_telemetry()">
+    Control telemetry state programmatically:
+
+    ```python
+    from obliteratus.telemetry import enable_telemetry, disable_telemetry, is_enabled
+
+    enable_telemetry()
+    print(is_enabled())  # True
+
+    disable_telemetry()
+    print(is_enabled())  # False
+    ```
+  </Step>
+</Steps>
+
+## How telemetry data flows
+
+<Steps>
+  <Step title="Local write">
+    Every benchmark record is appended to a local JSONL file:
+
+    - **HuggingFace Spaces**: `/data/obliteratus/telemetry.jsonl` (persistent storage)
+    - **Local install**: `~/.obliteratus/telemetry.jsonl`
+    - **Fallback**: `/tmp/obliteratus_telemetry/telemetry.jsonl` (ephemeral)
+
+    Set `OBLITERATUS_DATA_DIR` to override the storage location.
+  </Step>
+
+  <Step title="Background Hub sync">
+    After each write, a debounced background thread uploads your local JSONL to the central HuggingFace Dataset repo (`pliny-the-prompter/OBLITERATUS-TELEMETRY`). The sync is debounced: it skips if the last sync was less than 30 seconds ago, preventing Hub API overload during rapid benchmark loops.
+
+    Each Space instance writes to its own file in the repo (`data/{instance_slug}.jsonl`), so duplicated Spaces all feed into the same central dataset without write conflicts.
+  </Step>
+
+  <Step title="Leaderboard aggregation">
+    The Leaderboard reads from both the local JSONL and the central Hub dataset, merges and deduplicates records by `(session_id, timestamp)`, groups by `(model_id, method)`, and computes best/average metrics. See [Community Leaderboard](/community/leaderboard) for details.
+  </Step>
+</Steps>
+
+## Viewing collected data
+
+You can inspect the telemetry file directly at any time:
+
+```python
+from obliteratus.telemetry import read_telemetry, storage_diagnostic
+
+# Read all local records (newest first)
+records = read_telemetry(max_records=100)
+for r in records:
+    print(r["model_id"], r["method"], r.get("refusal_rate"))
+
+# Check storage configuration and file location
+diag = storage_diagnostic()
+print(diag["telemetry_file"])        # full path to the JSONL file
+print(diag["telemetry_file_size_bytes"])
+print(diag["is_persistent"])         # True if using /data persistent storage
+print(diag["telemetry_enabled"])     # current enabled state
+```
+
+To manually push local data to the Hub:
+
+```python
+from obliteratus.telemetry import push_to_hub
+
+push_to_hub()  # requires HF_TOKEN in environment
+```
+
+## Privacy guarantees
+
+<AccordionGroup>
+  <Accordion title="Session ID is not a user identifier">
+    The `session_id` is computed as `sha256(time() + random() + pid)[:12]`. It is generated once per process start, is not stored anywhere except in the telemetry record itself, and cannot be correlated across sessions or machines. It exists only to deduplicate records during leaderboard aggregation.
+  </Accordion>
+
+  <Accordion title="Model name is a public HuggingFace ID">
+    The `model_id` field stores the public HuggingFace Hub ID (e.g., `meta-llama/Llama-3.1-8B-Instruct`). This is the same identifier you pass on the command line. Local model paths are never sent.
+  </Accordion>
+
+  <Accordion title="Hardware info is aggregate, not identifying">
+    GPU name (e.g., `NVIDIA A100-SXM4-80GB`) and VRAM size are detected via `torch.cuda.get_device_name()` and `torch.cuda.get_device_properties()`. These are aggregate statistics shared by many machines and cannot identify you.
+  </Accordion>
+
+  <Accordion title="The full schema is public">
+    Every field collected is documented in `BenchmarkRecord` and `build_report()` in `obliteratus/telemetry.py`. The file is intentionally readable. If a field isn't listed there, it isn't collected.
+  </Accordion>
+
+  <Accordion title="Telemetry is always opt-in locally">
+    The default value of `OBLITERATUS_TELEMETRY` is `"0"` on local installs. It is only `"1"` by default on HuggingFace Spaces (`SPACE_ID` env var present), where it is disclosed in the Space README.
+  </Accordion>
+</AccordionGroup>

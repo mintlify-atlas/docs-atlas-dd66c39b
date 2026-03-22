@@ -1,0 +1,88 @@
+---
+title: "Introduction"
+description: "OBLITERATUS — the most advanced open-source toolkit for understanding and removing refusal behaviors from large language models."
+---
+
+# OBLITERATUS
+
+**Break the chains. Free the mind. Keep the brain.**
+
+OBLITERATUS is the most advanced open-source toolkit for understanding and removing refusal behaviors from large language models — and every single run makes it smarter. It implements **abliteration** — a family of techniques that identify and surgically remove the internal representations responsible for content refusal, without retraining or fine-tuning.
+
+The result: a model that responds to all prompts without artificial gatekeeping, while preserving its core language capabilities.
+
+<Note>
+OBLITERATUS is more than a tool — it's a **distributed research experiment**. Every time you obliterate a model with telemetry enabled, your run contributes anonymous benchmark data to a growing, crowd-sourced dataset that powers the next generation of abliteration research.
+</Note>
+
+## What OBLITERATUS does
+
+<CardGroup cols={2}>
+  <Card title="Map the chains" icon="magnifying-glass">
+    Ablation studies systematically knock out model components and measure what breaks — revealing *where* refusal is anchored inside the transformer.
+  </Card>
+  <Card title="Break the chains" icon="scissors">
+    Targeted obliteration extracts the refusal subspace using SVD decomposition, then surgically projects it out. Six stages: SUMMON → PROBE → DISTILL → EXCISE → VERIFY → REBIRTH.
+  </Card>
+  <Card title="Understand the geometry" icon="chart-network">
+    15 deep analysis modules map the precise geometric structure of guardrails: how many distinct refusal mechanisms exist, which layers enforce them, and how they self-repair.
+  </Card>
+  <Card title="Analysis-informed liberation" icon="brain">
+    The `informed` method closes the loop: analysis runs *during* obliteration to auto-configure every decision — which chains to target, how many directions to extract, which layers are safe.
+  </Card>
+</CardGroup>
+
+## Six ways to use OBLITERATUS
+
+<CardGroup cols={3}>
+  <Card title="HuggingFace Spaces" icon="rocket" href="/usage/huggingface-spaces">
+    Zero setup, free GPU via ZeroGPU. Click Obliterate. Done.
+  </Card>
+  <Card title="Local Web UI" icon="display" href="/usage/local-ui">
+    Same Gradio interface running on your own hardware.
+  </Card>
+  <Card title="Google Colab" icon="notebook" href="/usage/colab">
+    Free T4 GPU for models up to ~8B parameters.
+  </Card>
+  <Card title="CLI" icon="terminal" href="/usage/cli">
+    Headless, scriptable automation for pipelines.
+  </Card>
+  <Card title="Python API" icon="code" href="/usage/python-api">
+    Full programmatic control for research pipelines.
+  </Card>
+  <Card title="YAML Configs" icon="file-code" href="/usage/yaml-configs">
+    Reproducible, version-controlled experiments.
+  </Card>
+</CardGroup>
+
+## Key capabilities
+
+| Capability | What it does |
+|---|---|
+| **Concept Cone Geometry** | Maps per-category guardrail directions with solid angle estimation |
+| **Alignment Imprint Detection** | Fingerprints DPO vs RLHF vs CAI vs SFT from subspace geometry alone |
+| **Cross-Model Universality Index** | Measures whether guardrail directions generalize across models |
+| **Defense Robustness Evaluation** | Ouroboros effect quantification, safety-capability entanglement mapping |
+| **Whitened SVD Extraction** | Covariance-normalized direction extraction for cleaner signal |
+| **Analysis-Informed Pipeline** | Analysis modules auto-configure obliteration strategy mid-pipeline |
+
+## Built on published research
+
+OBLITERATUS implements techniques from:
+- [Arditi et al. (2024)](https://arxiv.org/abs/2406.11717) — Refusal in LLMs is mediated by a single direction
+- [Gabliteration (arXiv:2512.18901)](https://arxiv.org/abs/2512.18901) — Adaptive multi-directional neural weight modification
+- [Turner et al. (2023)](https://arxiv.org/abs/2308.10248) — Activation Addition / steering vectors
+- [Rimsky et al. (2024)](https://arxiv.org/abs/2312.06681) — Contrastive Activation Addition
+
+## License
+
+Dual-licensed: **AGPL-3.0** for open source use, with a **commercial license** available for organizations that cannot comply with AGPL obligations. See [GitHub Issues](https://github.com/elder-plinius/OBLITERATUS/issues) for commercial licensing.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="play" href="/quickstart">
+    Obliterate your first model in minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install OBLITERATUS locally
+  </Card>
+</CardGroup>

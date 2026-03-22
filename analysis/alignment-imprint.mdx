@@ -1,0 +1,152 @@
+---
+title: "Alignment Imprint Detection"
+description: "Fingerprint a model's alignment training method from subspace geometry — DPO, RLHF, CAI, or SFT."
+---
+
+`AlignmentImprintDetector` reads the geometric structure of a model's refusal subspace and infers which alignment training method was used — without access to training data, loss curves, or model cards. Different training methods leave measurably distinct fingerprints in how refusal directions are distributed across layers.
+
+<Note>
+This is a novel technique with no direct prior-work equivalent. It complements model card information and is particularly useful for models where the training method is undocumented or uncertain.
+</Note>
+
+## The four training method signatures
+
+<AccordionGroup>
+  <Accordion title="DPO — Direct Preference Optimization">
+    DPO directly optimizes logprob ratios between preferred and rejected responses. This leaves a **sparse, concentrated** imprint:
+
+    - Refusal is concentrated in a small number of layers
+    - High Gini coefficient of per-layer refusal strength
+    - Low effective rank of the refusal subspace
+    - Refusal direction has high cosine similarity with the preference gradient direction
+
+    **Removal strategy**: Lower regularization is sufficient; fewer passes needed. Projection can be aggressive since capability entanglement is lower.
+  </Accordion>
+  <Accordion title="RLHF — PPO-based Reinforcement Learning">
+    PPO's policy gradient updates smooth and distribute the refusal signal across many layers:
+
+    - Refusal distributed more broadly across layers
+    - Lower Gini coefficient, higher effective rank
+    - Smoother cross-layer alignment profile
+    - Reward model smoothing spreads the signal
+
+    **Removal strategy**: Requires targeting more layers. Moderate regularization. Cross-layer alignment analysis is especially important here to identify the spread.
+  </Accordion>
+  <Accordion title="CAI — Constitutional AI">
+    Multi-round self-critique creates layered, recursive refusal structure:
+
+    - Refusal directions at different layers are more mutually orthogonal
+    - Low mean pairwise cosine between layer directions
+    - High cone dimensionality
+    - Multiple passes of self-critique embed refusal at multiple functional stages
+
+    **Removal strategy**: Requires the most directions (up to 8) and the most passes. The `surgical` or `informed` method is strongly recommended.
+  </Accordion>
+  <Accordion title="SFT — Supervised Fine-Tuning only">
+    The simplest imprint — direct behavior cloning places refusal mostly in final layers:
+
+    - Strong tail-layer bias (most refusal in the last 25% of layers)
+    - Low dimensionality, low spread
+    - High concentration with a near-linear cone
+
+    **Removal strategy**: Target the final layers only. Even the `basic` method (1 direction) is often sufficient for SFT-only models.
+  </Accordion>
+</AccordionGroup>
+
+## Python usage
+
+```python
+from obliteratus.analysis import AlignmentImprintDetector
+
+detector = AlignmentImprintDetector()
+
+# Detect alignment imprint from refusal directions and per-layer strength
+imprint = detector.detect(
+    refusal_directions=pipeline.refusal_directions,
+    per_layer_strength=pipeline._per_layer_refusal_strength,  # dict[int, float]
+)
+
+print(f"Predicted method: {imprint.predicted_method}")
+print(f"Confidence: {imprint.confidence:.2f}")
+print()
+print("Probability distribution:")
+print(f"  DPO:  {imprint.dpo_probability:.3f}")
+print(f"  RLHF: {imprint.rlhf_probability:.3f}")
+print(f"  CAI:  {imprint.cai_probability:.3f}")
+print(f"  SFT:  {imprint.sft_probability:.3f}")
+print()
+print("Geometric features:")
+print(f"  Gini coefficient:          {imprint.gini_coefficient:.3f}")
+print(f"  Effective rank:            {imprint.effective_rank:.2f}")
+print(f"  Cross-layer smoothness:    {imprint.cross_layer_smoothness:.3f}")
+print(f"  Tail-layer bias:           {imprint.tail_layer_bias:.3f}")
+print(f"  Mean pairwise orthogon.:   {imprint.mean_pairwise_orthogonality:.3f}")
+print(f"  Spectral decay rate:       {imprint.spectral_decay_rate:.3f}")
+```
+
+### `AlignmentImprint` fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `predicted_method` | `str` | `"dpo"`, `"rlhf"`, `"cai"`, or `"sft"` |
+| `confidence` | `float` | Confidence in the prediction (0–1) |
+| `dpo_probability` | `float` | Posterior probability for DPO |
+| `rlhf_probability` | `float` | Posterior probability for RLHF |
+| `cai_probability` | `float` | Posterior probability for CAI |
+| `sft_probability` | `float` | Posterior probability for SFT |
+| `gini_coefficient` | `float` | Concentration of refusal strength across layers |
+| `effective_rank` | `float` | Dimensionality of the refusal subspace |
+| `cross_layer_smoothness` | `float` | How smoothly refusal varies across layers |
+| `tail_layer_bias` | `float` | Fraction of refusal in the final 25% of layers |
+| `mean_pairwise_orthogonality` | `float` | Mean `(1 - \|cos\|)` between layer directions |
+| `spectral_decay_rate` | `float` | How fast singular values decay |
+| `per_layer_strength` | `dict[int, float]` | Refusal signal magnitude per layer |
+
+## What the detected method determines
+
+The informed pipeline uses `predicted_method` to select:
+
+| Method | Regularization | Projection aggressiveness | Expected passes |
+|--------|---------------|--------------------------|----------------|
+| `sft` | Low | High | 1–2 |
+| `dpo` | Low–Medium | High | 1–2 |
+| `rlhf` | Medium | Medium | 2–3 |
+| `cai` | High | Low–Medium | 3–4 |
+
+```python
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+pipeline = InformedAbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_informed",
+)
+output_path, report = pipeline.run_informed()
+
+# Alignment detection result is in the report
+print(f"Detected: {report.insights.detected_alignment_method}")
+print(f"Confidence: {report.insights.alignment_confidence:.2f}")
+```
+
+## Comparing base vs. instruct model
+
+The `BaseInstructDelta` dataclass captures what alignment training actually changed at each layer — the vector difference between the base model and the aligned model's representations:
+
+```python
+# Requires access to both base and instruct versions of the model
+delta = detector.compute_base_instruct_delta(
+    base_activations=base_acts[layer_idx],
+    instruct_activations=instruct_acts[layer_idx],
+    refusal_direction=pipeline.refusal_directions[layer_idx],
+    layer_idx=layer_idx,
+)
+
+print(f"Layer {layer_idx}:")
+print(f"  Delta magnitude:        {delta.delta_magnitude:.4f}")
+print(f"  Cosine with refusal:    {delta.cosine_with_refusal:.4f}")
+print(f"  Refusal component:      {delta.refusal_component:.4f}")
+print(f"  Orthogonal component:   {delta.orthogonal_component:.4f}")
+```
+
+<Tip>
+High `cosine_with_refusal` in the delta means alignment training pushed activations strongly toward the refusal direction at that layer — a high-value target for obliteration. High `orthogonal_component` indicates the layer changed for reasons beyond refusal (e.g., capability improvements), making it more risky to modify.
+</Tip>

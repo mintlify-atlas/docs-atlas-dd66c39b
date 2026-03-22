@@ -1,0 +1,379 @@
+---
+title: "CLI Reference"
+description: "Complete reference for all obliteratus CLI commands and flags."
+---
+
+## Installation
+
+After installing OBLITERATUS, the `obliteratus` command is available on `$PATH`.
+
+```bash
+pip install obliteratus
+obliteratus --help
+```
+
+---
+
+## `obliteratus obliterate`
+
+Run the full abliteration pipeline on a single model.
+
+```bash
+obliteratus obliterate <model> [flags]
+```
+
+<Note>`obliterate` and `abliterate` are equivalent. `abliterate` is retained as a backward-compatible alias.</Note>
+
+### Arguments
+
+<ParamField path="model" type="str" required>
+  HuggingFace model name or local path (e.g., `meta-llama/Llama-3.1-8B-Instruct`).
+</ParamField>
+
+### Flags
+
+<ParamField path="--output-dir" type="str" default="abliterated/{model_name}">
+  Directory to save the abliterated model and metadata.
+</ParamField>
+
+<ParamField path="--device" type="str" default="auto">
+  Device: `auto`, `cuda`, `cpu`, `mps`.
+</ParamField>
+
+<ParamField path="--dtype" type="str" default="float16">
+  Model dtype: `float16`, `bfloat16`, `float32`.
+</ParamField>
+
+<ParamField path="--method" type="str" default="advanced">
+  Abliteration method. Choices: `basic`, `advanced`, `aggressive`, `spectral_cascade`, `informed`, `surgical`, `optimized`, `inverted`, `nuclear`.
+</ParamField>
+
+<ParamField path="--n-directions" type="int" default="None (from method)">
+  Override the number of refusal directions to extract.
+</ParamField>
+
+<ParamField path="--direction-method" type="str" default="None (from method)">
+  Override direction extraction algorithm. Choices: `diff_means`, `svd`, `leace`.
+</ParamField>
+
+<ParamField path="--regularization" type="float" default="None (from method)">
+  Override regularization fraction (0.0–1.0).
+</ParamField>
+
+<ParamField path="--refinement-passes" type="int" default="None (from method)">
+  Override number of iterative refinement passes.
+</ParamField>
+
+<ParamField path="--quantization" type="str" default="None">
+  Load with quantization: `4bit` or `8bit`. Requires `bitsandbytes`.
+</ParamField>
+
+<ParamField path="--large-model" type="bool" default="False (flag)">
+  Enable conservative defaults for 120B+ models (caps directions, SAE features, and refinement passes).
+</ParamField>
+
+<ParamField path="--verify-sample-size" type="int" default="30">
+  Number of harmful prompts to test for refusal rate. Increase to `100` for tighter confidence intervals.
+</ParamField>
+
+<ParamField path="--contribute" type="bool" default="False (flag)">
+  Save a community contribution record to `community_results/` after the run.
+</ParamField>
+
+<ParamField path="--contribute-notes" type="str" default="">
+  Optional free-text notes to include with the community contribution.
+</ParamField>
+
+**Examples:**
+```bash
+# Basic run
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct
+
+# Aggressive method with 4-bit quantization
+obliteratus obliterate Qwen/Qwen2.5-7B-Instruct \
+    --method aggressive \
+    --quantization 4bit \
+    --output-dir my_abliterated_qwen
+
+# Override directions and save a community contribution
+obliteratus obliterate mistralai/Mistral-7B-Instruct-v0.3 \
+    --method surgical \
+    --n-directions 6 \
+    --verify-sample-size 100 \
+    --contribute \
+    --contribute-notes "Tested on RTX 4090 with default prompts"
+```
+
+---
+
+## `obliteratus run`
+
+Run an ablation study from a YAML config file.
+
+```bash
+obliteratus run <config> [--output-dir DIR] [--preset PRESET]
+```
+
+<ParamField path="config" type="str" required>
+  Path to a YAML study config file.
+</ParamField>
+
+<ParamField path="--output-dir" type="str" default="None">
+  Override the output directory specified in the config.
+</ParamField>
+
+<ParamField path="--preset" type="str" default="None">
+  Apply a named preset (e.g., `quick`, `full`, `attention`, `jailbreak`, `guardrail`).
+</ParamField>
+
+---
+
+## `obliteratus info`
+
+Print architecture information for a model without running abliteration.
+
+```bash
+obliteratus info <model> [--task TASK] [--device DEVICE] [--dtype DTYPE]
+```
+
+<ParamField path="model" type="str" required>
+  HuggingFace model name or local path.
+</ParamField>
+
+<ParamField path="--task" type="str" default="causal_lm">
+  Model task type. Choices: `causal_lm`, `classification`.
+</ParamField>
+
+<ParamField path="--device" type="str" default="cpu">
+  Device to load on (prefer `cpu` for info-only — no GPU needed).
+</ParamField>
+
+<ParamField path="--dtype" type="str" default="float32">
+  Model dtype for the info pass.
+</ParamField>
+
+**Example:**
+```bash
+obliteratus info meta-llama/Llama-3.1-8B-Instruct --device cpu
+```
+
+---
+
+## `obliteratus interactive`
+
+Launch a guided setup wizard that walks through hardware, model, and preset selection.
+
+```bash
+obliteratus interactive
+```
+
+No flags. Prompts for all settings interactively.
+
+---
+
+## `obliteratus models`
+
+Browse the curated model library, optionally filtered by compute tier.
+
+```bash
+obliteratus models [--tier TIER]
+```
+
+<ParamField path="--tier" type="str" default="None (all tiers)">
+  Filter by compute tier. Choices: `tiny` (CPU/laptop), `small` (4–8 GB), `medium` (8–16 GB), `large` (24 GB+), `frontier` (multi-GPU/cloud).
+</ParamField>
+
+---
+
+## `obliteratus presets`
+
+List available study presets (quick, full, jailbreak, etc.) with their strategy sets and descriptions.
+
+```bash
+obliteratus presets
+```
+
+---
+
+## `obliteratus strategies`
+
+List all registered ablation strategy classes.
+
+```bash
+obliteratus strategies
+```
+
+---
+
+## `obliteratus ui`
+
+Launch the Gradio web UI locally (same interface as the HuggingFace Space).
+
+```bash
+obliteratus ui [flags]
+```
+
+<ParamField path="--port" type="int" default="7860">
+  Server port.
+</ParamField>
+
+<ParamField path="--host" type="str" default="0.0.0.0">
+  Bind address.
+</ParamField>
+
+<ParamField path="--share" type="bool" default="False (flag)">
+  Create a public Gradio share link.
+</ParamField>
+
+<ParamField path="--no-browser" type="bool" default="False (flag)">
+  Suppress auto-opening a browser tab on launch.
+</ParamField>
+
+<ParamField path="--auth" type="str" default="None">
+  HTTP basic auth credentials as `user:password`.
+</ParamField>
+
+<ParamField path="--quiet" type="bool" default="False (flag)">
+  Suppress the startup banner.
+</ParamField>
+
+**Examples:**
+```bash
+# Default local launch
+obliteratus ui
+
+# LAN access with auth
+obliteratus ui --host 0.0.0.0 --port 8080 --auth admin:secret
+
+# Public share link
+obliteratus ui --share --no-browser
+```
+
+---
+
+## `obliteratus report`
+
+Regenerate a report (tables + plots) from a saved `results.json` file.
+
+```bash
+obliteratus report <results_json> [--output-dir DIR]
+```
+
+<ParamField path="results_json" type="str" required>
+  Path to the `results.json` file produced by a study run.
+</ParamField>
+
+<ParamField path="--output-dir" type="str" default="Same directory as results_json">
+  Directory to write `impact.png` and `heatmap.png`.
+</ParamField>
+
+---
+
+## `obliteratus aggregate`
+
+Aggregate community contribution JSON files into a summary table.
+
+```bash
+obliteratus aggregate [--dir DIR]
+```
+
+<ParamField path="--dir" type="str" default="community_results">
+  Directory containing contribution JSON files to aggregate.
+</ParamField>
+
+---
+
+## `obliteratus recommend`
+
+Show the telemetry-driven best method and hyperparameters for a given model.
+
+```bash
+obliteratus recommend <model> [--device DEVICE] [--dtype DTYPE] [--insights]
+```
+
+<ParamField path="model" type="str" required>
+  HuggingFace model name or local path.
+</ParamField>
+
+<ParamField path="--device" type="str" default="cpu">
+  Device for architecture detection.
+</ParamField>
+
+<ParamField path="--dtype" type="str" default="float32">
+  Dtype for architecture detection.
+</ParamField>
+
+<ParamField path="--insights" type="bool" default="False (flag)">
+  Also display global cross-architecture telemetry insights and per-architecture method rankings.
+</ParamField>
+
+**Example:**
+```bash
+obliteratus recommend meta-llama/Llama-3.1-8B-Instruct --insights
+```
+
+---
+
+## `obliteratus tourney`
+
+Run a March Madness-style tournament: pit all abliteration methods against each other and push the winner to the HuggingFace Hub.
+
+```bash
+obliteratus tourney <model> [flags]
+```
+
+<ParamField path="model" type="str" required>
+  HuggingFace model name or local path.
+</ParamField>
+
+<ParamField path="--hub-org" type="str" default="None">
+  HuggingFace organization to push the winner to (e.g., `my-org`).
+</ParamField>
+
+<ParamField path="--hub-repo" type="str" default="None">
+  Full HuggingFace repo ID to push to (overrides `--hub-org`).
+</ParamField>
+
+<ParamField path="--device" type="str" default="auto">
+  Device for all tournament runs.
+</ParamField>
+
+<ParamField path="--dtype" type="str" default="float16">
+  Dtype for all tournament runs.
+</ParamField>
+
+<ParamField path="--dataset" type="str" default="builtin">
+  Dataset source for evaluation.
+</ParamField>
+
+<ParamField path="--quantization" type="str" default="None">
+  Load with quantization: `4bit` or `8bit`.
+</ParamField>
+
+<ParamField path="--output-dir" type="str" default="/tmp/obliteratus_tourney">
+  Root directory for per-method model outputs and the bracket Markdown file.
+</ParamField>
+
+<ParamField path="--methods" type="str+" default="All methods">
+  Space-separated list to run only specific methods (e.g., `--methods advanced surgical aggressive`).
+</ParamField>
+
+**Example:**
+```bash
+obliteratus tourney meta-llama/Llama-3.1-8B-Instruct \
+    --hub-org my-research-org \
+    --dtype bfloat16 \
+    --methods advanced surgical aggressive inverted
+```
+
+---
+
+## Backward Compatibility
+
+The `abliterate` subcommand is an exact alias for `obliterate` and accepts all the same flags. It is hidden from `--help` output but fully supported for existing scripts.
+
+```bash
+# These are equivalent:
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct
+obliteratus abliterate meta-llama/Llama-3.1-8B-Instruct
+```

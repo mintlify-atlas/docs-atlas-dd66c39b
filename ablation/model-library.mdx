@@ -1,0 +1,349 @@
+---
+title: "Model Library"
+description: "116 curated models organized by compute tier — from CPU-runnable tiny models to multi-GPU frontier models."
+---
+
+OBLITERATUS ships with presets for 116 models, each annotated with the recommended dtype, quantization, and compute tier. Pick any model from the library and it will be downloaded from HuggingFace Hub and configured correctly for ablation studies.
+
+```bash
+# Browse all models
+obliteratus models
+
+# Filter by compute tier
+obliteratus models --tier tiny
+obliteratus models --tier small
+obliteratus models --tier medium
+obliteratus models --tier large
+obliteratus models --tier frontier
+```
+
+---
+
+## Compute tiers
+
+<CardGroup cols={2}>
+  <Card title="Tiny" icon="microchip">
+    CPU or &lt;1 GB VRAM. Instant downloads, seconds-per-epoch. Ideal for learning, CI, and rapid iteration.
+  </Card>
+  <Card title="Small" icon="memory">
+    ~4–8 GB VRAM or 8 GB RAM. A basic consumer GPU or patient CPU. 1B–4B parameter models.
+  </Card>
+  <Card title="Medium" icon="server">
+    ~8–16 GB VRAM. Consumer GPUs like RTX 3060/4060. 6B–12B parameter models, often with 4-bit quant.
+  </Card>
+  <Card title="Large" icon="hard-drive">
+    24 GB+ VRAM. RTX 3090/4090 or A100. 14B–40B models with 4-bit quantization.
+  </Card>
+  <Card title="Frontier" icon="globe">
+    Multi-GPU or cloud. Top open-weight models: dense 70B+ or MoE with hundreds of billions of parameters.
+  </Card>
+</CardGroup>
+
+---
+
+## Models by tier
+
+<Tabs>
+  <Tab title="Tiny (CPU / &lt;1 GB)">
+    All tiny-tier models run on CPU without a GPU. Recommended dtype is `float32` for the smallest models (under ~350M params) and `float16` for 1B+ models.
+
+    | Model | HuggingFace ID | Params | Dtype |
+    |---|---|---|---|
+    | DistilGPT-2 | `distilbert/distilgpt2` | 82M | float32 |
+    | SmolLM2-135M | `HuggingFaceTB/SmolLM2-135M` | 135M | float32 |
+    | Pythia 160M | `EleutherAI/pythia-160m` | 160M | float32 |
+    | SmolLM2-360M | `HuggingFaceTB/SmolLM2-360M` | 360M | float32 |
+    | Pythia 410M | `EleutherAI/pythia-410m` | 410M | float32 |
+    | GPT-2 Small | `openai-community/gpt2` | 124M | float32 |
+    | GPT-2 Medium | `openai-community/gpt2-medium` | 355M | float32 |
+    | OpenELM 270M | `apple/OpenELM-270M` | 270M | float32 |
+    | OpenELM 1.1B | `apple/OpenELM-1_1B` | 1.1B | float16 |
+    | TinyLlama 1.1B | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | 1.1B | float16 |
+    | OLMo 2 1B Instruct | `allenai/OLMo-2-0425-1B-Instruct` | 1B | float16 |
+    | Qwen2.5-0.5B | `Qwen/Qwen2.5-0.5B` | 0.5B | float16 |
+    | Qwen2.5-0.5B Instruct | `Qwen/Qwen2.5-0.5B-Instruct` | 0.5B | float16 |
+    | Qwen3-0.6B | `Qwen/Qwen3-0.6B` | 0.6B | float16 |
+    | Qwen3.5-0.8B | `Qwen/Qwen3.5-0.8B` | 0.8B | float16 |
+  </Tab>
+  <Tab title="Small (4–8 GB)">
+    Small-tier models fit on a basic consumer GPU or can run on CPU with patience. No quantization required on 8 GB VRAM.
+
+    | Model | HuggingFace ID | Params | Dtype | Quant |
+    |---|---|---|---|---|
+    | GPT-2 Large | `openai-community/gpt2-large` | 774M | float16 | — |
+    | GPT-2 XL | `openai-community/gpt2-xl` | 1.5B | float16 | — |
+    | Pythia 1.4B | `EleutherAI/pythia-1.4b` | 1.4B | float16 | — |
+    | Pythia 2.8B | `EleutherAI/pythia-2.8b` | 2.8B | float16 | — |
+    | Qwen2.5-1.5B | `Qwen/Qwen2.5-1.5B` | 1.5B | float16 | — |
+    | Qwen2.5-1.5B Instruct | `Qwen/Qwen2.5-1.5B-Instruct` | 1.5B | float16 | — |
+    | Qwen3-1.7B | `Qwen/Qwen3-1.7B` | 1.7B | float16 | — |
+    | Qwen2.5-3B Instruct | `Qwen/Qwen2.5-3B-Instruct` | 3B | float16 | — |
+    | Qwen3-4B | `Qwen/Qwen3-4B` | 4B | float16 | — |
+    | Qwen3.5-2B | `Qwen/Qwen3.5-2B` | 2B | float16 | — |
+    | Qwen3.5-4B | `Qwen/Qwen3.5-4B` | 4B | float16 | — |
+    | DeepSeek-R1 Distill Qwen 1.5B | `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` | 1.5B | float16 | — |
+    | Gemma-2 2B | `google/gemma-2-2b` | 2B | float16 | — |
+    | Phi-2 | `microsoft/phi-2` | 2.7B | float16 | — |
+    | Phi-4 Mini Instruct | `microsoft/Phi-4-mini-instruct` | 3.8B | float16 | — |
+    | SmolLM2-1.7B | `HuggingFaceTB/SmolLM2-1.7B-Instruct` | 1.7B | float16 | — |
+    | SmolLM3-3B | `HuggingFaceTB/SmolLM3-3B` | 3B | float16 | — |
+    | OpenELM 3B | `apple/OpenELM-3B` | 3B | float16 | — |
+    | Granite 3.1 2B Instruct | `ibm-granite/granite-3.1-2b-instruct` | 2B | float16 | — |
+    | StableLM-2 1.6B | `stabilityai/stablelm-2-1_6b` | 1.6B | float16 | — |
+    | StableLM-2 Zephyr 1.6B | `stabilityai/stablelm-2-zephyr-1_6b` | 1.6B | float16 | — |
+    | Falcon3-3B Instruct | `tiiuae/Falcon3-3B-Instruct` | 3B | float16 | — |
+    | Nemotron Mini 4B | `nvidia/Nemotron-Mini-4B-Instruct` | 4B | float16 | — |
+    | MiniCPM3-4B | `openbmb/MiniCPM3-4B` | 4B | float16 | — |
+  </Tab>
+  <Tab title="Medium (8–16 GB)">
+    Medium-tier models typically require 4-bit quantization on 8 GB GPUs or can run in float16 on 16 GB GPUs.
+
+    | Model | HuggingFace ID | Params | Dtype | Quant |
+    |---|---|---|---|---|
+    | Yi 1.5 6B Chat | `01-ai/Yi-1.5-6B-Chat` | 6B | float16 | — |
+    | Yi 1.5 9B Chat | `01-ai/Yi-1.5-9B-Chat` | 9B | float16 | 4bit |
+    | Qwen2.5-7B | `Qwen/Qwen2.5-7B` | 7B | float16 | 4bit |
+    | Qwen2.5-7B Instruct | `Qwen/Qwen2.5-7B-Instruct` | 7B | float16 | 4bit |
+    | Qwen2.5 Coder 7B Instruct | `Qwen/Qwen2.5-Coder-7B-Instruct` | 7B | float16 | 4bit |
+    | Qwen3-8B | `Qwen/Qwen3-8B` | 8B | float16 | 4bit |
+    | Qwen3.5-9B | `Qwen/Qwen3.5-9B` | 9B | float16 | 4bit |
+    | OLMo 3 7B Instruct | `allenai/Olmo-3-7B-Instruct` | 7B | float16 | 4bit |
+    | Pythia 6.9B | `EleutherAI/pythia-6.9b` | 6.9B | float16 | 4bit |
+    | Gemma-2 9B | `google/gemma-2-9b` | 9B | float16 | 4bit |
+    | Gemma 3 12B | `google/gemma-3-12b-it` | 12B | float16 | 4bit |
+    | Phi-3.5 Mini | `microsoft/Phi-3.5-mini-instruct` | 3.8B | float16 | — |
+    | Mistral 7B v0.3 | `mistralai/Mistral-7B-v0.3` | 7B | float16 | 4bit |
+    | Mistral Nemo 12B | `mistralai/Mistral-Nemo-Instruct-2407` | 12B | float16 | 4bit |
+    | Granite 3.1 8B Instruct | `ibm-granite/granite-3.1-8b-instruct` | 8B | float16 | 4bit |
+    | Aya Expanse 8B | `CohereForAI/aya-expanse-8b` | 8B | float16 | 4bit |
+    | DeepSeek-R1 Distill Qwen 7B | `deepseek-ai/DeepSeek-R1-Distill-Qwen-7B` | 7B | float16 | 4bit |
+    | DeepSeek-R1 Distill Llama 8B | `deepseek-ai/DeepSeek-R1-Distill-Llama-8B` | 8B | float16 | 4bit |
+    | DeepSeek-R1 0528 Qwen3-8B | `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B` | 8B | float16 | 4bit |
+    | Falcon 7B | `tiiuae/falcon-7b` | 7B | float16 | 4bit |
+    | Falcon3-7B Instruct | `tiiuae/Falcon3-7B-Instruct` | 7B | float16 | 4bit |
+    | Falcon 11B | `tiiuae/falcon-11B` | 11B | float16 | 4bit |
+    | GLM-4 9B | `THUDM/glm-4-9b` | 9B | float16 | 4bit |
+    | GLM-4 9B Chat HF | `THUDM/glm-4-9b-chat-hf` | 9B | float16 | 4bit |
+    | InternLM3-8B Instruct | `internlm/internlm3-8b-instruct` | 8B | float16 | 4bit |
+    | InternLM2.5 7B Chat | `internlm/internlm2_5-7b-chat` | 7B | float16 | 4bit |
+    | Mistral NeMo Minitron 8B | `nvidia/Mistral-NeMo-Minitron-8B-Instruct` | 8B | float16 | 4bit |
+    | Dolphin 2.9 Llama-3.1 8B | `cognitivecomputations/dolphin-2.9.4-llama3.1-8b` | 8B | float16 | 4bit |
+    | Hermes 3 Llama-3.1 8B | `NousResearch/Hermes-3-Llama-3.1-8B` | 8B | float16 | 4bit |
+    | WhiteRabbitNeo 7B | `WhiteRabbitNeo/WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B` | 7B | float16 | 4bit |
+    | Qwen2.5-7B Abliterated | `huihui-ai/Qwen2.5-7B-Instruct-abliterated` | 7B | float16 | 4bit |
+  </Tab>
+  <Tab title="Large (24 GB+)">
+    Large-tier models require a high-VRAM consumer GPU (RTX 3090/4090) or a professional GPU (A100 40GB+). 4-bit quantization is recommended.
+
+    | Model | HuggingFace ID | Params | Dtype | Quant |
+    |---|---|---|---|---|
+    | Yi 1.5 34B Chat | `01-ai/Yi-1.5-34B-Chat` | 34B | bfloat16 | 4bit |
+    | Qwen2.5-14B | `Qwen/Qwen2.5-14B` | 14B | float16 | 4bit |
+    | Qwen3-32B | `Qwen/Qwen3-32B` | 32B | bfloat16 | 4bit |
+    | Qwen3 30B-A3B (MoE) | `Qwen/Qwen3-30B-A3B` | 30B MoE | bfloat16 | 4bit |
+    | OLMo 2 32B Instruct | `allenai/OLMo-2-0325-32B-Instruct` | 32B | bfloat16 | 4bit |
+    | OLMo 3.1 32B Think | `allenai/Olmo-3.1-32B-Think` | 32B | bfloat16 | 4bit |
+    | Pythia 12B | `EleutherAI/pythia-12b` | 12B | float16 | 4bit |
+    | Gemma 3 27B | `google/gemma-3-27b-it` | 27B | bfloat16 | 4bit |
+    | Phi-4 | `microsoft/phi-4` | 14B | float16 | 4bit |
+    | Mistral Small 24B | `mistralai/Mistral-Small-24B-Instruct-2501` | 24B | bfloat16 | 4bit |
+    | Mistral Small 3.1 24B | `mistralai/Mistral-Small-3.1-24B-Instruct-2503` | 24B | bfloat16 | 4bit |
+    | Aya Expanse 32B | `CohereForAI/aya-expanse-32b` | 32B | bfloat16 | 4bit |
+    | Command R | `CohereForAI/c4ai-command-r-v01` | 35B | bfloat16 | 4bit |
+    | DeepSeek-R1 Distill Qwen 14B | `deepseek-ai/DeepSeek-R1-Distill-Qwen-14B` | 14B | float16 | 4bit |
+    | DeepSeek-R1 Distill Qwen 32B | `deepseek-ai/DeepSeek-R1-Distill-Qwen-32B` | 32B | bfloat16 | 4bit |
+    | DeepSeek-R1 Distill Llama 70B | `deepseek-ai/DeepSeek-R1-Distill-Llama-70B` | 70B | bfloat16 | 4bit |
+    | LLaMA-3.1 8B | `meta-llama/Llama-3.1-8B` | 8B | float16 | 4bit |
+    | Falcon 40B | `tiiuae/falcon-40b` | 40B | bfloat16 | 4bit |
+    | GLM-4 9B Chat | `THUDM/glm-4-9b-chat` | 9B | float16 | 4bit |
+    | GLM-4 32B Chat | `zai-org/GLM-4-32B-0414` | 32B | bfloat16 | 4bit |
+    | GLM-4.7 Flash (MoE) | `zai-org/GLM-4.7-Flash` | 30B MoE | bfloat16 | 4bit |
+    | InternLM2.5 20B Chat | `internlm/internlm2_5-20b-chat` | 20B | bfloat16 | 4bit |
+    | GPT-OSS 20B (MoE) | `openai/gpt-oss-20b` | 20B MoE | float16 | 4bit |
+    | Kimi-K2 Instruct (MoE) | `moonshotai/Kimi-K2-Instruct` | 1T MoE | bfloat16 | 4bit |
+    | Llama-3.1 8B Abliterated | `mlabonne/Meta-Llama-3.1-8B-Instruct-abliterated` | 8B | float16 | 4bit |
+    | Llama-3.1 8B Lexi Uncensored | `Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2` | 8B | float16 | 4bit |
+    | Dolphin 2.9 Mistral 24B | `cognitivecomputations/dolphin-2.9.4-mistral-24b` | 24B | bfloat16 | 4bit |
+    | WhiteRabbitNeo 33B | `WhiteRabbitNeo/WhiteRabbitNeo-33B-DeepSeekCoder` | 33B | bfloat16 | 4bit |
+  </Tab>
+  <Tab title="Frontier (multi-GPU)">
+    Frontier models require multiple GPUs or cloud infrastructure. All use 4-bit quantization.
+
+    | Model | HuggingFace ID | Params | Dtype |
+    |---|---|---|---|
+    | Qwen2.5-72B | `Qwen/Qwen2.5-72B` | 72B | bfloat16 |
+    | Qwen3 235B-A22B (MoE) | `Qwen/Qwen3-235B-A22B` | 235B MoE | bfloat16 |
+    | Qwen3.5 397B-A17B (MoE) | `Qwen/Qwen3.5-397B-A17B` | 397B MoE | bfloat16 |
+    | LLaMA-3.1 70B | `meta-llama/Llama-3.1-70B` | 70B | bfloat16 |
+    | Llama 4 Scout (MoE) | `meta-llama/Llama-4-Scout-17B-16E-Instruct` | 109B MoE | bfloat16 |
+    | Llama 4 Maverick (MoE) | `meta-llama/Llama-4-Maverick-17B-128E-Instruct` | ~400B MoE | bfloat16 |
+    | Command R+ | `CohereForAI/c4ai-command-r-plus` | 104B | bfloat16 |
+    | DBRX Instruct (MoE) | `databricks/dbrx-instruct` | 132B MoE | bfloat16 |
+    | DeepSeek-V3 (MoE) | `deepseek-ai/DeepSeek-V3` | 685B MoE | bfloat16 |
+    | DeepSeek-R1 (MoE) | `deepseek-ai/DeepSeek-R1` | 671B MoE | bfloat16 |
+    | Llama-3.1 Nemotron 70B | `nvidia/Llama-3.1-Nemotron-70B-Instruct-HF` | 70B | bfloat16 |
+    | MiniMax M2.1 (MoE) | `MiniMaxAI/MiniMax-M2.1` | 230B MoE | bfloat16 |
+    | MiniMax M2.5 (MoE) | `MiniMaxAI/MiniMax-M2.5` | 230B MoE | bfloat16 |
+    | Mistral Large 3 (MoE) | `mistralai/Mistral-Large-3-675B-Instruct-2512` | 675B MoE | bfloat16 |
+    | Step 3.5 Flash (MoE) | `stepfun-ai/Step-3.5-Flash` | 197B MoE | bfloat16 |
+    | GLM-4.7 (MoE) | `zai-org/GLM-4.7` | 355B MoE | bfloat16 |
+    | GLM-5 (MoE) | `zai-org/GLM-5` | 744B MoE | bfloat16 |
+    | Kimi K2.5 (MoE) | `moonshotai/Kimi-K2.5` | 1T MoE | bfloat16 |
+  </Tab>
+</Tabs>
+
+---
+
+## Pre-liberated variants for A/B comparison
+
+The library includes community fine-tunes with refusal behaviors already removed. Run ablation studies on both the base instruct model and its pre-liberated counterpart to directly see which components were changed by the abliteration process.
+
+<CardGroup cols={2}>
+  <Card title="Dolphin" icon="fish">
+    Cognitive Computations' uncensored fine-tunes. No alignment filtering applied.
+    - `cognitivecomputations/dolphin-2.9.4-llama3.1-8b` (medium)
+    - `cognitivecomputations/dolphin-2.9.4-mistral-24b` (large)
+  </Card>
+  <Card title="Hermes" icon="bolt">
+    Nous Research's uncensored models with strong reasoning capabilities.
+    - `NousResearch/Hermes-3-Llama-3.1-8B` (medium)
+  </Card>
+  <Card title="WhiteRabbitNeo" icon="shield">
+    Cybersecurity-focused uncensored models for pentesting and red-teaming.
+    - `WhiteRabbitNeo/WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B` (medium)
+    - `WhiteRabbitNeo/WhiteRabbitNeo-33B-DeepSeekCoder` (large)
+  </Card>
+  <Card title="Abliterated community models" icon="wrench">
+    Models with refusal directions explicitly removed via the abliteration technique.
+    - `huihui-ai/Qwen2.5-7B-Instruct-abliterated` (medium)
+    - `mlabonne/Meta-Llama-3.1-8B-Instruct-abliterated` (large)
+    - `Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2` (large)
+  </Card>
+</CardGroup>
+
+<Tip>
+  To A/B compare a base instruct model against its pre-liberated variant, run the same ablation study config (same preset, same dataset, same seed) against both model IDs. The components where the impact profiles diverge most are the ones that encode the alignment behaviors that were removed.
+</Tip>
+
+---
+
+## Dtype and quantization guide
+
+| Situation | Recommended settings |
+|---|---|
+| Models under 1B params | `dtype: float32`, no quantization |
+| 1B–6B params on GPU | `dtype: float16`, no quantization |
+| 7B–12B on 8 GB VRAM | `dtype: float16`, `quantization: 4bit` |
+| 14B–35B on 24 GB VRAM | `dtype: bfloat16`, `quantization: 4bit` |
+| 70B+ / MoE frontier | `dtype: bfloat16`, `quantization: 4bit`, multi-GPU |
+
+In your study YAML:
+
+```yaml
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  task: causal_lm
+  dtype: float16          # float32, float16, or bfloat16
+  device: auto            # "cpu", "cuda", "cuda:0", or "auto"
+```
+
+For quantized loading, use the Python API with `bitsandbytes`:
+
+```python
+from transformers import BitsAndBytesConfig
+import torch
+
+quant_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.float16,
+)
+```
+
+<Warning>
+  Quantization affects ablation accuracy: zeroing weights in a quantized model dequantizes the affected blocks. For publication-quality results, prefer full-precision or float16 runs on appropriately-sized GPUs. Use quantization only when memory constraints make it necessary.
+</Warning>
+
+---
+
+## Accessing presets from Python
+
+```python
+from obliteratus.presets import (
+    MODEL_PRESETS,
+    get_presets_by_tier,
+    list_all_presets,
+    is_gated,
+)
+
+# Get all models in a tier
+small_models = get_presets_by_tier("small")
+for m in small_models:
+    print(f"{m.name:35s}  {m.params:8s}  {m.hf_id}")
+
+# Get a specific model by HuggingFace ID
+preset = MODEL_PRESETS["openai-community/gpt2"]
+print(preset.recommended_dtype)         # "float32"
+print(preset.recommended_quantization)  # None
+print(preset.tier)                       # "tiny"
+print(preset.gated)                      # False
+
+# Check if a model requires a HuggingFace token
+print(is_gated("meta-llama/Llama-3.1-8B"))  # True
+print(is_gated("openai-community/gpt2"))     # False
+
+# List all 116 models sorted by tier then name
+for m in list_all_presets():
+    print(f"[{m.tier:8s}]  {m.name}")
+```
+
+---
+
+## Using models not in the library
+
+Any HuggingFace model ID works — you don't need a preset entry. Just set `model.name` to the full HuggingFace repo ID:
+
+```yaml
+model:
+  name: your-org/your-custom-model
+  task: causal_lm
+  dtype: float16
+  device: auto
+  trust_remote_code: true   # required for custom architectures
+```
+
+Or in Python:
+
+```python
+from obliteratus.models.loader import load_model
+
+handle = load_model(
+    model_name="your-org/your-custom-model",
+    task="causal_lm",
+    dtype="float16",
+    device="auto",
+    trust_remote_code=True,
+)
+```
+
+<Note>
+  Models outside the library don't have a `recommended_dtype` or `gated` annotation. Check the model's HuggingFace page to confirm whether you need a token (`HF_TOKEN` env var) and which dtype is appropriate for your hardware.
+</Note>
+
+---
+
+## Architecture support
+
+OBLITERATUS works with any HuggingFace transformer. The ablation strategies auto-detect the attention layout and FFN structure from the model architecture name:
+
+| Architecture | Attention layout | Notes |
+|---|---|---|
+| GPT-2 | Fused `c_attn` Conv1D (Q/K/V packed) | Head slicing uses column offsets |
+| LLaMA, Mistral, Qwen, Gemma | Separate `q_proj`/`k_proj`/`v_proj`/`o_proj` | Standard layout |
+| Falcon | Separate `query_key_value` fused | Handled via `get_attention_module` |
+| OPT, BLOOM | `q_proj`/`k_proj`/`v_proj` + `out_proj` | Standard layout |
+| Phi | Separate projections | Standard layout |
+| StableLM | Separate projections | Standard layout |
+| GLM | `query_key_value` fused + `dense` | Uses `trust_remote_code` |
+| MoE models (DeepSeek, Qwen MoE, Kimi) | Expert-granular routing | Use `trust_remote_code: true` |
+
+For architectures not listed, pass `trust_remote_code: true` in the model config. If auto-detection fails, open an issue — custom architecture support can be added via the `get_attention_module` and `get_ffn_module` utilities in `obliteratus/strategies/utils.py`.

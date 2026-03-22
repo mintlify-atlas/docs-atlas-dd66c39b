@@ -1,0 +1,144 @@
+---
+title: "Surgical Method"
+description: "Precision surgery for MoE and complex architectures — Expert-Granular Abliteration with head surgery and SAE."
+---
+
+The `surgical` method is the precision instrument for Mixture-of-Experts (MoE) models and other complex architectures where a single shared direction per layer is insufficient. It implements Expert-Granular Abliteration (EGA), which decomposes the refusal signal into per-expert components by profiling router logit behavior during PROBE, then operates on each expert independently.
+
+## What makes it "surgical"
+
+Standard abliteration applies the same direction vector to every weight matrix in a layer. In a dense transformer, this is reasonable — the FFN is a single block. In an MoE transformer (DeepSeek, Qwen MoE, GLM-4, Mixtral), the FFN is replaced by a routing network plus `N` independent expert FFNs. Different experts may carry different amounts of refusal signal. Applying one direction to all of them is imprecise — it hits capability experts as hard as safety experts.
+
+`surgical` solves this by:
+
+1. **EGA router profiling**: installing forward hooks on each MoE router *during* PROBE to record per-prompt router logits
+2. **Expert safety classification**: computing which experts are preferentially activated for harmful prompts vs harmless prompts
+3. **Per-expert directions**: computing a separate refusal direction for each expert based on the activations routed to it
+4. **Layer-adaptive projection strength**: scaling the projection weight at each layer proportional to its refusal signal strength (√ratio)
+5. **Attention head surgery**: projecting refusal directions out of the top safety-associated attention heads
+6. **SAE feature abliteration**: using sparse autoencoder decomposition to find and remove individual SAE features that encode refusal
+7. **Safety-neuron masking**: identifying and zeroing the specific weight rows most responsible for refusal
+
+**Method configuration from source:**
+
+```python
+"surgical": {
+    "n_directions": 8,
+    "direction_method": "svd",
+    "norm_preserve": True,
+    "regularization": 0.0,
+    "refinement_passes": 2,
+    "project_biases": True,
+    "use_chat_template": True,
+    "use_whitened_svd": True,
+    "true_iterative_refinement": True,
+    "use_jailbreak_contrast": True,
+    "layer_adaptive_strength": True,
+    "safety_neuron_masking": True,
+    "per_expert_directions": True,
+    "attention_head_surgery": True,
+    "use_sae_features": True,
+    "invert_refusal": False,
+}
+```
+
+## The EGA technique in detail
+
+Expert-Granular Abliteration is the key innovation that makes `surgical` suitable for MoE models.
+
+### Step 1: Router profiling hooks
+
+Before running activation collection, `surgical` installs `register_forward_hook` on every MoE router module it can find (searching `_ROUTER_NAMES = ["gate", "router", "wg"]` plus auto-detection). During the harmful and harmless prompt passes in PROBE, these hooks record the per-prompt router logit tensors:
+
+```python
+# From _install_router_profiling_hooks():
+def hook_fn(module, input, output):
+    logits = output if isinstance(output, torch.Tensor) else output[0]
+    # For CoT-aware models: average across positions to capture reasoning tokens
+    if logits.dim() == 3 and logits.shape[1] > 4:
+        logits = logits.mean(dim=1)   # (batch, num_experts)
+    else:
+        logits = logits[:, -1, :]     # last token only
+    target[layer_idx].append(logits.detach().cpu().float())
+```
+
+The hooks persist through both the harmful pass (`_routing_is_harmful=True`) and the harmless pass (`_routing_is_harmful=False`), building `_routing_harmful` and `_routing_harmless` dicts.
+
+### Step 2: Expert safety scoring
+
+After PROBE, the pipeline computes a safety affinity score for each expert by comparing its mean routing weight on harmful prompts vs harmless prompts. Experts that are preferentially activated for harmful inputs are classified as safety-associated; those neutral or inverse are left untouched.
+
+### Step 3: Per-expert direction computation
+
+For each MoE layer, instead of computing one direction from all activations, `surgical` partitions the harmful and harmless activations by which expert processed them and computes a separate direction per expert. This gives each expert's weight matrices a direction that reflects the refusal geometry *specific to that expert's input distribution*.
+
+## Best for
+
+- **MoE models**: DeepSeek-V3, DeepSeek-R1, Qwen MoE, GLM-4 MoE, Mixtral
+- **High-precision requirements**: when you need to minimize capability damage on a model where you care about every point of coherence
+- **Models where `advanced` leaves residual refusal**: the 8 directions + SAE features catch mechanisms that 4 directions miss
+
+<Warning>
+  `surgical` is significantly slower than `advanced` and requires more VRAM. Router profiling hooks run extra computation during PROBE. SAE feature extraction and attention head surgery add additional passes. Expect 2-4× the wall time of `advanced` on the same model.
+</Warning>
+
+## CLI usage
+
+```bash
+# Surgical method on a MoE model
+obliteratus obliterate deepseek-ai/DeepSeek-V3 --method surgical
+
+# With output dir and contribution
+obliteratus obliterate deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
+    --method surgical \
+    --output-dir ./surgical-liberated \
+    --contribute --contribute-notes "H100, default prompts, MoE"
+
+# For very large MoE models — conservative mode reduces memory
+obliteratus obliterate deepseek-ai/DeepSeek-V3 \
+    --method surgical \
+    --large-model \
+    --dtype float16
+```
+
+## Python API usage
+
+```python
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    method="surgical",
+    output_dir="surgical_liberated",
+    trust_remote_code=True,  # required for some MoE models
+)
+result_path = pipeline.run()
+
+# Inspect EGA artifacts
+for layer_idx, expert_dirs in pipeline._expert_directions.items():
+    for expert_idx, direction in expert_dirs.items():
+        print(f"Layer {layer_idx}, Expert {expert_idx}: {direction.shape}")
+
+# Inspect router profiling data (cleared after DISTILL, but available during)
+# pipeline._routing_harmful   # {layer_idx: [tensor(num_experts), ...]}
+# pipeline._routing_harmless  # {layer_idx: [tensor(num_experts), ...]}
+
+# Expert safety scores (layer → list of (expert_idx, safety_affinity))
+for layer_idx, scores in pipeline._expert_safety_scores.items():
+    top_safety = sorted(scores, key=lambda x: -x[1])[:3]
+    print(f"Layer {layer_idx} top safety experts: {top_safety}")
+
+# Quality metrics
+print(pipeline._quality_metrics)
+```
+
+## VRAM requirements
+
+| Model size | Recommended VRAM |
+|------------|------------------|
+| 7-8B dense | 16 GB |
+| 7-8B MoE (e.g. Mixtral) | 24 GB |
+| 14-20B MoE | 40 GB |
+| 70B+ MoE | Multi-GPU or `--quantization 4bit` |
+
+For very large MoE models (DeepSeek-V3 685B, Qwen3-235B), use `--large-model` which caps `n_directions` to 4, SAE features to 4, and refinement passes to 1.

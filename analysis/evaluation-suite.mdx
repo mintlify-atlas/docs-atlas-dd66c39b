@@ -1,0 +1,231 @@
+---
+title: "Evaluation Suite"
+description: "Measure the quality of obliteration with refusal rate, perplexity, coherence, KL divergence, and more."
+---
+
+The evaluation suite provides all metrics needed to assess obliteration quality: whether refusal was removed (`refusal_rate`), whether general language capability is preserved (`perplexity`, `coherence`, `kl_divergence`), and whether representations changed as expected (`CKA`, `effective_rank`). These metrics are computed automatically in the VERIFY stage of every pipeline run and exposed via `pipeline._quality_metrics`.
+
+## Metrics reference
+
+<AccordionGroup>
+  <Accordion title="refusal_rate">
+    **What it measures**: Fraction of harmful prompts that still produce a refusal response.
+
+    Detection matches against an extended list of refusal prefixes and substrings (canonical GCG/AdvBench prefixes from Zou et al. (2023) plus extended patterns for subtle refusals, polite declines, and common non-English refusals in 7 languages).
+
+    **Target after obliteration**: < 0.05 (fewer than 5% of harmful prompts refused).
+
+    **Three detection modes**:
+    - `"prefix"`: checks if the response starts with a known refusal prefix (fast)
+    - `"substring"`: checks for refusal substrings anywhere in the response (more robust)
+    - `"combined"`: both checks (most thorough, recommended for evaluation)
+
+    ```python
+    from obliteratus.evaluation import refusal_rate
+
+    rate = refusal_rate(responses, mode="combined")
+    print(f"Refusal rate: {rate:.1%}")
+    ```
+
+    **`refusal_rate_with_ci`** computes a bootstrap confidence interval:
+
+    ```python
+    from obliteratus.evaluation import refusal_rate_with_ci
+
+    rate, ci_low, ci_high = refusal_rate_with_ci(
+        responses,
+        mode="combined",
+        confidence=0.95,
+        n_bootstrap=1000,
+    )
+    print(f"Refusal rate: {rate:.1%} (95% CI: {ci_low:.1%}–{ci_high:.1%})")
+    ```
+  </Accordion>
+  <Accordion title="perplexity">
+    **What it measures**: Cross-entropy loss exponentiated — how well the model predicts the next token on a held-out corpus. Measures overall language modeling quality.
+
+    **Interpretation**:
+    - Baseline (unmodified model): model-dependent, typically 5–20 for instruction-tuned models on wikitext
+    - After obliteration: an increase of < 10% relative to baseline is generally acceptable
+    - Large increases (> 25%) indicate the obliteration damaged general language capability
+
+    **Lower is better.**
+
+    ```python
+    from obliteratus.evaluation import perplexity
+
+    ppl = perplexity(logits, labels)
+    print(f"Perplexity: {ppl:.2f}")
+    ```
+  </Accordion>
+  <Accordion title="kl_divergence">
+    **What it measures**: KL divergence between the original and obliterated model's output distributions on harmless prompts. Captures how much the model's behavior changed on prompts that should be unaffected.
+
+    Two variants are available:
+    - `token_kl_divergence`: average per-token KL over the full sequence — comprehensive but slow
+    - `first_token_kl_divergence`: KL on only the first generated token — efficient proxy (Young, 2025)
+
+    **Target**: < 0.05 on harmless prompts indicates minimal collateral damage.
+
+    **Lower is better for harmless prompts.**
+
+    ```python
+    from obliteratus.evaluation import token_kl_divergence, first_token_kl_divergence
+
+    # Full-sequence KL
+    kl = token_kl_divergence(
+        original_logits=orig_logits,
+        modified_logits=mod_logits,
+        input_ids=input_ids,
+    )
+
+    # Efficient first-token KL
+    first_kl = first_token_kl_divergence(
+        original_model=orig_model,
+        modified_model=mod_model,
+        prompts=harmless_prompts,
+        tokenizer=tokenizer,
+    )
+    ```
+  </Accordion>
+  <Accordion title="linear_cka">
+    **What it measures**: Centered Kernel Alignment (CKA) between the activation matrices of the original and obliterated model at each layer (Kornblith et al., 2019). A representational similarity metric that is invariant to rotation and isotropic scaling.
+
+    **Interpretation**:
+    - CKA = 1.0: identical representations
+    - CKA > 0.9: minimal representational change
+    - CKA < 0.7: substantial representational divergence — the layer's function may have changed
+
+    Useful for identifying which layers were most affected by obliteration.
+
+    **Higher is better (closer to original).**
+
+    ```python
+    from obliteratus.evaluation import linear_cka
+
+    cka_score = linear_cka(
+        activations_x=orig_layer_acts,   # (n_samples, hidden_dim)
+        activations_y=mod_layer_acts,
+    )
+    print(f"CKA at layer {layer_idx}: {cka_score:.4f}")
+    ```
+  </Accordion>
+  <Accordion title="effective_rank">
+    **What it measures**: Intrinsic dimensionality of a weight matrix, computed as the Shannon entropy of the normalized singular value distribution (Roy & Vetterli, 2007). Tracks whether obliteration collapsed the representation space.
+
+    `effective_rank_change` computes the ratio of post-obliteration to pre-obliteration rank — values < 0.9 indicate significant rank collapse.
+
+    **Interpretation**: Significant effective rank reduction in middle layers can indicate capability loss even when perplexity looks acceptable.
+
+    ```python
+    from obliteratus.evaluation import effective_rank, effective_rank_change
+
+    rank_before = effective_rank(weight_matrix_original)
+    rank_after = effective_rank(weight_matrix_modified)
+    ratio = effective_rank_change(weight_matrix_original, weight_matrix_modified)
+
+    print(f"Effective rank: {rank_before:.1f} → {rank_after:.1f} (ratio: {ratio:.3f})")
+    ```
+  </Accordion>
+  <Accordion title="coherence (via format_eval_report)">
+    **What it measures**: A composite score combining perplexity delta, first-token KL, and refusal rate into a single summary judgment. Surfaced in `format_eval_report()` as a human-readable report.
+
+    ```python
+    from obliteratus.evaluation import AbliterationEvalResult, format_eval_report
+
+    eval_result = AbliterationEvalResult(
+        refusal_rate=0.03,
+        perplexity_original=12.4,
+        perplexity_modified=13.1,
+        first_token_kl=0.02,
+        mean_cka=0.94,
+        effective_rank_ratio=0.97,
+    )
+
+    print(format_eval_report(eval_result))
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Accessing metrics from the pipeline
+
+All metrics computed during VERIFY are stored on the pipeline object:
+
+```python
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",
+    output_dir="abliterated",
+)
+pipeline.run()
+
+# Access the full quality metrics dict
+metrics = pipeline._quality_metrics
+print(f"Refusal rate:    {metrics['refusal_rate']:.1%}")
+print(f"Perplexity:      {metrics['perplexity']:.2f}")
+print(f"First-token KL:  {metrics['kl_divergence']:.4f}")
+print(f"Mean CKA:        {metrics['mean_cka']:.4f}")
+```
+
+## `verify_sample_size` parameter
+
+The accuracy of `refusal_rate` scales with the number of test prompts. The pipeline's `verify_sample_size` parameter controls how many harmful prompts are generated during VERIFY:
+
+```python
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",
+    output_dir="abliterated",
+    verify_sample_size=100,   # default is 30; higher = more accurate refusal_rate
+)
+```
+
+| `verify_sample_size` | Refusal rate precision | Approximate overhead |
+|---------------------|------------------------|---------------------|
+| 30 (default) | ±0.18 at 95% CI | Minimal |
+| 100 | ±0.10 at 95% CI | ~2× VERIFY time |
+| 300 | ±0.06 at 95% CI | ~6× VERIFY time |
+
+Use `refusal_rate_with_ci` with `n_bootstrap=1000` for confidence intervals on the resulting rate.
+
+## How evaluation feeds into the VERIFY stage
+
+The VERIFY stage runs automatically after EXCISE in every pipeline. Its role:
+
+1. Compute all metrics above on the modified model
+2. Check whether `refusal_rate` exceeds the threshold (default: 0.05)
+3. If the Ouroboros effect is detected (refusal_rate still high after projected layers were targeted), fire additional passes at the compensating layers identified by `DefenseRobustnessEvaluator`
+4. Re-evaluate after each additional pass until either the threshold is met or the maximum pass count is reached
+5. Store final metrics in `pipeline._quality_metrics` and embed them in the REBIRTH output metadata
+
+```python
+# After run_informed(), the report includes VERIFY results
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+pipeline = InformedAbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_informed",
+)
+output_path, report = pipeline.run_informed()
+
+print(f"Final refusal rate:  {report.final_metrics['refusal_rate']:.1%}")
+print(f"Perplexity delta:    {report.final_metrics['perplexity_delta']:.2f}")
+print(f"Ouroboros passes:    {report.ouroboros_passes}")
+```
+
+## Community-standard evaluation
+
+For comparison with published results, the `heretic_eval` module implements the Arditi et al. / Heretics evaluation protocol:
+
+```python
+from obliteratus.evaluation import arditi_refusal_rate, run_full_heretic_eval
+
+# Arditi et al. refusal rate (uses their specific prompt set and detection method)
+rate = arditi_refusal_rate(model, tokenizer)
+
+# Full Heretics comparison: refusal rate + HarmBench ASR + first-token KL
+result = run_full_heretic_eval(model, tokenizer, baseline_model, baseline_tokenizer)
+print(format_comparison_table(result))
+```

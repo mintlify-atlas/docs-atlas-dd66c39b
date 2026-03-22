@@ -1,0 +1,160 @@
+---
+title: "Steering Vectors"
+description: "Apply inference-time behavioral steering without modifying model weights."
+---
+
+Steering vectors are an alternative to weight projection: instead of permanently modifying weights, they add scaled direction vectors to the residual stream at specified layers during the forward pass. The model's weights are never touched — steering is fully reversible and can be switched on or off per request.
+
+<Info>
+Based on Turner et al. (2023), "Activation Addition: Steering Language Models Without Optimization" (arXiv:2308.10248) and Rimsky et al. (2024), "Steering Llama 2 via Contrastive Activation Addition" (arXiv:2312.06681).
+</Info>
+
+## Three construction methods
+
+### `SteeringVectorFactory.from_refusal_direction()`
+
+Create a vector directly from a pre-computed refusal direction. The most common path when you've already run the OBLITERATUS pipeline and have `pipeline.refusal_directions`.
+
+```python
+from obliteratus.analysis import SteeringVectorFactory
+
+vec = SteeringVectorFactory.from_refusal_direction(
+    refusal_direction=pipeline.refusal_directions[layer_idx],
+    source_layer=layer_idx,
+    alpha=-1.0,  # negative = steer AWAY from refusal
+)
+```
+
+`alpha=-1.0` subtracts the refusal direction from the residual stream (removes refusal). `alpha=+1.0` adds it (reinforces refusal). Typical effective range is `-3.0` to `+3.0` — see [Alpha tuning](#alpha-tuning) below.
+
+### `SteeringVectorFactory.from_contrastive_pairs()`
+
+Compute a steering vector from the mean difference between harmful and harmless activations — the Contrastive Activation Addition (CAA) approach from Rimsky et al. (2024).
+
+```python
+vec = SteeringVectorFactory.from_contrastive_pairs(
+    positive_activations=harmful_acts,   # list of (hidden_dim,) tensors — "positive" direction
+    negative_activations=harmless_acts,  # list of (hidden_dim,) tensors
+    label="refusal",
+    alpha=1.0,
+)
+```
+
+The vector is `mean(positive) - mean(negative)`, normalized to unit length. `metadata` on the returned vector includes `n_positive`, `n_negative`, and `raw_magnitude` of the unnormalized difference.
+
+### `SteeringVectorFactory.combine()`
+
+Compose multiple vectors into one:
+
+```python
+combined = SteeringVectorFactory.combine(
+    vectors=[vec_layer_10, vec_layer_15, vec_layer_20],
+    weights=[0.5, 0.3, 0.2],   # optional; equal weights if omitted
+    label="combined_refusal",
+)
+```
+
+## Applying steering with `SteeringHookManager`
+
+`SteeringHookManager` installs PyTorch forward hooks on the specified layers. The hooks modify the layer's output hidden states by adding the steered direction before passing them to the next layer.
+
+### Full example
+
+```python
+from obliteratus.analysis import SteeringVectorFactory, SteeringHookManager
+from obliteratus.analysis.steering_vectors import SteeringConfig
+
+# 1. Build the steering vector
+vec = SteeringVectorFactory.from_refusal_direction(
+    refusal_direction=pipeline.refusal_directions[15],
+    source_layer=15,
+    alpha=-1.0,
+)
+
+# 2. Configure: which layers to steer, global alpha, per-layer overrides
+config = SteeringConfig(
+    vectors=[vec],
+    target_layers=[10, 11, 12, 13, 14, 15],
+    alpha=1.0,                                    # global multiplier
+    per_layer_alpha={10: 0.5, 15: 1.5},           # optional per-layer overrides
+    position="all",                               # steer all token positions
+    normalize=True,                               # normalize direction before scaling
+)
+
+# 3. Install hooks — no weights modified
+manager = SteeringHookManager()
+result = manager.install(model, config)
+print(f"Hooks installed on {result.hooks_installed} layers")
+
+# 4. Generate with steering active
+output = model.generate(input_ids, max_new_tokens=200)
+
+# 5. Remove steering — model is back to its original behavior
+manager.remove()
+print(f"Steering active: {manager.is_active}")  # False
+```
+
+### `SteeringConfig` fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `vectors` | `list[SteeringVector]` | — | Steering vectors to apply |
+| `target_layers` | `list[int]` | — | Layer indices to install hooks on |
+| `alpha` | `float` | `1.0` | Global scaling multiplier applied on top of each vector's `default_alpha` |
+| `per_layer_alpha` | `dict[int, float]` | `{}` | Per-layer alpha overrides (replaces global `alpha` for that layer) |
+| `position` | `str` | `"all"` | Which token positions to steer: `"all"`, `"last"`, or `"first"` |
+| `normalize` | `bool` | `True` | Normalize direction to unit norm before scaling |
+
+## Alpha tuning
+
+The effective steering magnitude for a layer is `alpha × vec.default_alpha`. For refusal removal:
+
+- `vec.default_alpha = -1.0` (set by `from_refusal_direction`)
+- `config.alpha = 1.0` → effective scale = `-1.0`
+- `config.alpha = 2.0` → effective scale = `-2.0` (stronger removal)
+
+| Alpha range | Effect |
+|-------------|--------|
+| `-0.5` to `-1.0` | Mild steering — reduces refusal rate, preserves most behavior |
+| `-1.0` to `-2.0` | Moderate — strong refusal reduction, minimal coherence impact |
+| `-2.0` to `-3.0` | Aggressive — near-zero refusal, watch for output quality degradation |
+| > `-3.0` | May produce incoherent outputs |
+
+<Tip>
+Use the **Strength Sweep** tab in the OBLITERATUS web UI to visualize the refusal rate vs. coherence tradeoff across alpha values before committing to a steering configuration.
+</Tip>
+
+## Composing multiple vectors
+
+Multiple vectors can be installed simultaneously — each is applied independently at its target layer. This enables fine-grained steering:
+
+```python
+# One vector per cluster, targeting the representative layer of each cluster
+configs = []
+for cluster in cross_layer_result.clusters:
+    rep_layer = cluster[0]  # representative layer of the cluster
+    vec = SteeringVectorFactory.from_refusal_direction(
+        refusal_direction=pipeline.refusal_directions[rep_layer],
+        source_layer=rep_layer,
+        alpha=-1.0,
+    )
+    configs.append((vec, [rep_layer]))
+
+# Combine into one config
+all_vecs = [c[0] for c in configs]
+all_layers = [layer for _, layers in configs for layer in layers]
+
+config = SteeringConfig(vectors=all_vecs, target_layers=all_layers)
+manager = SteeringHookManager()
+manager.install(model, config)
+```
+
+## Advantages over weight projection
+
+| Property | Steering vectors | Weight projection |
+|----------|-----------------|------------------|
+| Reversibility | Fully reversible per-request | Permanent (or LoRA adapter) |
+| Tuning | Continuous alpha at inference time | Fixed after projection |
+| Composability | Multiple vectors, different layers | Single projection per layer |
+| Overhead | Small per-token hook cost | None (baked into weights) |
+| Use case | Experimentation, per-request control | Production deployment |

@@ -1,0 +1,204 @@
+---
+title: "Sweep API"
+description: "Run grid-search parameter sweeps over abliteration methods and configurations."
+---
+
+## Overview
+
+The sweep API lets you systematically vary hyperparameters across the full abliteration pipeline to find optimal configurations. It generates a Cartesian product of all specified parameter values and runs `AbliterationPipeline` once per combination, recording quality metrics for comparison.
+
+```python
+from obliteratus.sweep import run_sweep, SweepConfig
+
+config = SweepConfig(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    sweep_params={
+        "n_directions": [1, 2, 4, 8],
+        "regularization": [0.0, 0.1, 0.3],
+    },
+    fixed_params={"norm_preserve": True, "method": "advanced"},
+)
+results = run_sweep(config)  # 12 runs total (4 × 3)
+```
+
+---
+
+## `run_sweep()`
+
+```python
+from obliteratus.sweep import run_sweep
+
+def run_sweep(config: SweepConfig) -> list[SweepResult]
+```
+
+Runs the full parameter grid. For each `(param_config, seed)` pair in `config.sweep_params × range(config.n_seeds)`, instantiates an `AbliterationPipeline` and calls `.run()`. Results are saved incrementally to `{config.output_dir}/sweep_results.json`.
+
+<ParamField path="config" type="SweepConfig" required>
+  Sweep configuration specifying the parameter grid and fixed values.
+</ParamField>
+
+**Returns** `list[SweepResult]` — one entry per `(param_config, seed)` pair, in grid-product order.
+
+<Note>Sweep runs are independent — a failed run records `error` in its `SweepResult` and the sweep continues. Partial results are written to disk after each run.</Note>
+
+---
+
+## `SweepConfig`
+
+```python
+@dataclass
+class SweepConfig:
+    model_name: str
+    sweep_params: dict[str, list[Any]]
+    fixed_params: dict[str, Any] = field(default_factory=dict)
+    output_dir: str = "sweep_results"
+    seed: int = 42
+    n_seeds: int = 1
+```
+
+<ParamField path="model_name" type="str" required>
+  HuggingFace model name or local path passed to every `AbliterationPipeline` in the sweep.
+</ParamField>
+
+<ParamField path="sweep_params" type="dict[str, list[Any]]" required>
+  Parameters to grid-search. Keys are `AbliterationPipeline` constructor argument names; values are lists of candidate values. All combinations are run.
+</ParamField>
+
+<ParamField path="fixed_params" type="dict[str, Any]" default="{}">
+  Parameters passed to every run unchanged. Merged with each `sweep_params` combination; `sweep_params` values take precedence on conflict.
+</ParamField>
+
+<ParamField path="output_dir" type="str" default="sweep_results">
+  Root directory for model outputs (`run_000/`, `run_001/`, ...) and the aggregated `sweep_results.json`.
+</ParamField>
+
+<ParamField path="seed" type="int" default="42">
+  Base random seed. Each additional seed offset adds `seed + offset`.
+</ParamField>
+
+<ParamField path="n_seeds" type="int" default="1">
+  How many different random seeds to run each parameter configuration with. Total runs = `len(grid) × n_seeds`.
+</ParamField>
+
+---
+
+## `SweepResult`
+
+```python
+@dataclass
+class SweepResult:
+    params: dict[str, Any]
+    seed: int
+    quality_metrics: dict[str, Any]
+    stage_durations: dict[str, float]
+    strong_layers: list[int]
+    error: str | None = None
+```
+
+<ResponseField name="params" type="dict[str, Any]">
+  The specific sweep parameter values for this run (the swept portion only, not `fixed_params`).
+</ResponseField>
+
+<ResponseField name="seed" type="int">
+  Random seed used.
+</ResponseField>
+
+<ResponseField name="quality_metrics" type="dict[str, Any]">
+  Quality metrics from the VERIFY stage: `refusal_rate`, `perplexity`, `coherence`, `kl_divergence`.
+</ResponseField>
+
+<ResponseField name="stage_durations" type="dict[str, float]">
+  Wall-clock seconds per stage: `{"summon": ..., "probe": ..., "distill": ..., "excise": ..., "verify": ..., "rebirth": ...}`.
+</ResponseField>
+
+<ResponseField name="strong_layers" type="list[int]">
+  Layer indices modified during excision.
+</ResponseField>
+
+<ResponseField name="error" type="str | None">
+  Error message if this run failed; `None` on success.
+</ResponseField>
+
+---
+
+## Code Examples
+
+<CodeGroup>
+```python Basic Grid Sweep
+from obliteratus.sweep import run_sweep, SweepConfig
+
+config = SweepConfig(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    sweep_params={
+        "n_directions": [1, 2, 4, 8],
+        "regularization": [0.0, 0.1, 0.3],
+    },
+    fixed_params={
+        "method": "advanced",
+        "norm_preserve": True,
+        "device": "auto",
+        "dtype": "bfloat16",
+    },
+    output_dir="sweep_n_dirs_vs_reg",
+    seed=42,
+)
+
+results = run_sweep(config)
+
+# Find best by refusal rate
+best = min(
+    (r for r in results if r.error is None),
+    key=lambda r: r.quality_metrics.get("refusal_rate", 1.0),
+)
+print(f"Best params: {best.params}")
+print(f"Refusal rate: {best.quality_metrics['refusal_rate']:.0%}")
+print(f"KL divergence: {best.quality_metrics['kl_divergence']:.4f}")
+```
+
+```python Multi-Seed Sweep
+from obliteratus.sweep import run_sweep, SweepConfig
+import json, statistics
+
+config = SweepConfig(
+    model_name="Qwen/Qwen2.5-7B-Instruct",
+    sweep_params={
+        "method": ["basic", "advanced", "aggressive", "surgical"],
+    },
+    fixed_params={"device": "auto", "dtype": "float16"},
+    output_dir="method_comparison",
+    n_seeds=3,  # run each method 3 times
+)
+
+results = run_sweep(config)
+
+# Group by method and compute mean refusal rate
+by_method: dict[str, list[float]] = {}
+for r in results:
+    if r.error:
+        continue
+    method = r.params["method"]
+    rate = r.quality_metrics.get("refusal_rate", 1.0)
+    by_method.setdefault(method, []).append(rate)
+
+for method, rates in sorted(by_method.items()):
+    print(f"{method:15s}: {statistics.mean(rates):.0%} ± {statistics.stdev(rates):.1%}")
+```
+
+```python Load and Analyze Saved Results
+import json
+from pathlib import Path
+
+# Results are saved incrementally during the sweep
+data = json.loads(Path("sweep_results/sweep_results.json").read_text())
+
+for run in data:
+    if run["error"]:
+        continue
+    print(
+        f"n_directions={run['params'].get('n_directions')}, "
+        f"reg={run['params'].get('regularization')}, "
+        f"refusal={run['quality_metrics'].get('refusal_rate', '?'):.0%}, "
+        f"kl={run['quality_metrics'].get('kl_divergence', '?'):.4f}"
+    )
+```
+</CodeGroup>

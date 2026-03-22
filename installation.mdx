@@ -1,0 +1,203 @@
+---
+title: "Installation"
+description: "Install OBLITERATUS and its dependencies on your system."
+---
+
+## Requirements
+
+- **Python** 3.10, 3.11, or 3.12
+- **PyTorch** 2.0 or higher
+- **CUDA** (optional) — required for GPU acceleration on NVIDIA hardware
+- **Git** — to install from source
+
+<Note>
+CUDA is not required. OBLITERATUS runs on CPU for small models (Tiny tier), on Apple Silicon via MPS, and on NVIDIA GPUs via CUDA. CPU-only runs are significantly slower for models above ~3B parameters.
+</Note>
+
+## Install options
+
+<CodeGroup>
+
+```bash standard
+pip install -e .
+```
+
+```bash with development tools
+pip install -e ".[dev]"
+```
+
+```bash with Gradio web UI
+pip install -e ".[spaces]"
+```
+
+</CodeGroup>
+
+The three install extras:
+
+| Extra | What it adds | Use when |
+|---|---|---|
+| *(none)* | Core pipeline, CLI, Python API | CLI and API usage |
+| `dev` | `pytest`, `pytest-cov`, `ruff`, `mypy` | Running tests or contributing |
+| `spaces` | `gradio>=5.0,<6.0` | Running the local web UI via `obliteratus ui` |
+
+## Core dependencies
+
+The following packages are installed automatically with any install option:
+
+| Package | Version | Purpose |
+|---|---|---|
+| `torch` | ≥ 2.0 | Tensor operations, model loading |
+| `transformers` | ≥ 4.40 | HuggingFace model and tokenizer loading |
+| `datasets` | ≥ 2.14 | Probe prompt datasets |
+| `accelerate` | ≥ 0.24 | Multi-GPU and mixed-precision support |
+| `safetensors` | ≥ 0.4 | Saving and loading model weights |
+| `bitsandbytes` | ≥ 0.46.1 | 4-bit and 8-bit quantization |
+| `scikit-learn` | ≥ 1.3 | Direction extraction and probing classifiers |
+| `numpy` | ≥ 1.24 | Numerical operations |
+| `pandas` | ≥ 2.0 | Results aggregation |
+| `matplotlib` | ≥ 3.7 | Visualization and report plots |
+| `seaborn` | ≥ 0.12 | Heatmaps and analysis charts |
+| `rich` | ≥ 13.0 | Terminal UI and progress display |
+| `pyyaml` | ≥ 6.0 | YAML config parsing |
+| `tqdm` | ≥ 4.64 | Progress bars |
+
+## Platform-specific instructions
+
+<Tabs>
+  <Tab title="NVIDIA CUDA">
+    Install PyTorch with CUDA support before installing OBLITERATUS. Visit [pytorch.org](https://pytorch.org/get-started/locally/) to get the right install command for your CUDA version.
+
+    ```bash
+    # Example for CUDA 12.1
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+    # Then install OBLITERATUS
+    pip install -e .
+    ```
+
+    `bitsandbytes` is included in the core dependencies and enables 4-bit and 8-bit quantization on CUDA. Use `--quantization 4bit` or `--quantization 8bit` with the `obliterate` command to load large models with reduced VRAM.
+
+    ```bash
+    obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct --quantization 4bit
+    ```
+  </Tab>
+
+  <Tab title="Apple Silicon">
+    OBLITERATUS runs on Apple Silicon via PyTorch MPS. Install the standard package first, then add the optional MLX acceleration dependencies:
+
+    ```bash
+    pip install -e .
+
+    # Optional: native MLX acceleration (macOS + Apple Silicon only)
+    pip install -r requirements-apple.txt
+    ```
+
+    `requirements-apple.txt` adds:
+
+    | Package | Version |
+    |---|---|
+    | `mlx` | ≥ 0.22 |
+    | `mlx-lm` | ≥ 0.20 |
+
+    <Warning>
+    `mlx` and `mlx-lm` are macOS-only. Do not install `requirements-apple.txt` on Linux or Windows — the packages will fail to install.
+    </Warning>
+
+    PyTorch device selection defaults to `auto`, which picks MPS on Apple Silicon when available. You can override with `--device mps` or `--device cpu`.
+  </Tab>
+
+  <Tab title="CPU only">
+    OBLITERATUS works on CPU without any special configuration. Install the standard package:
+
+    ```bash
+    pip install -e .
+    ```
+
+    CPU is practical for **Tiny tier** models (GPT-2, TinyLlama 1.1B, Qwen2.5-0.5B) and for inspection commands like `obliteratus info` and `obliteratus strategies`. For models above ~3B parameters, expect significantly slower probe collection and projection.
+
+    <Tip>
+    Use `obliteratus models --tier tiny` to browse models that run comfortably on CPU.
+    </Tip>
+  </Tab>
+</Tabs>
+
+## Verify the installation
+
+Confirm the CLI is available and the package imported correctly:
+
+```bash
+# Print help and confirm the CLI is on your PATH
+obliteratus --help
+
+# List available ablation strategies (imports the full package)
+obliteratus strategies
+
+# Browse the curated model library
+obliteratus models
+```
+
+Or verify from Python:
+
+```python
+from obliteratus.abliterate import AbliterationPipeline, METHODS
+
+# Print all available obliteration methods
+for name, cfg in METHODS.items():
+    print(f"{name}: {cfg['description']}")
+```
+
+## Docker
+
+A `Dockerfile` is included for local containerized usage.
+
+<Warning>
+The included Dockerfile is for local Docker usage only. The HuggingFace Space runs on ZeroGPU via the Gradio SDK and does not use this Dockerfile.
+</Warning>
+
+```bash
+# Build the image
+docker build -t obliteratus .
+
+# Run with GPU access (NVIDIA)
+docker run --gpus all -p 7860:7860 obliteratus
+
+# Run CPU-only
+docker run -p 7860:7860 obliteratus
+```
+
+The container runs `python app.py` and exposes the Gradio web UI on port 7860. Mount a volume to persist obliterated models outside the container:
+
+```bash
+docker run --gpus all -p 7860:7860 -v $(pwd)/output:/app/abliterated obliteratus
+```
+
+## Hardware requirements
+
+OBLITERATUS ships with presets for 116 models across five compute tiers. Use these as a guide when selecting a model for your hardware.
+
+| Tier | VRAM | Example models |
+|---|---|---|
+| **Tiny** | CPU / < 1 GB | GPT-2, TinyLlama 1.1B, Qwen2.5-0.5B, SmolLM2 |
+| **Small** | 4–8 GB | Phi-2 2.7B, Gemma-2 2B, StableLM-2 1.6B |
+| **Medium** | 8–16 GB | Mistral 7B, Qwen2.5-7B, Gemma-2 9B, Phi-3.5 |
+| **Large** | 24+ GB | LLaMA-3.1 8B, Qwen2.5-14B, Mistral 24B, DeepSeek-R1 distills |
+| **Frontier** | Multi-GPU | DeepSeek-V3.2 685B, Qwen3-235B, GLM-4.7 355B |
+
+For Large and Frontier tier models, use `--quantization 4bit` to reduce peak VRAM usage. For 120B+ models, add `--large-model` to enable conservative defaults (fewer directions, single pass).
+
+```bash
+# Large model on a single 24 GB GPU
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct \
+    --method advanced \
+    --quantization 4bit
+
+# Frontier model on multi-GPU with conservative settings
+obliteratus obliterate deepseek-ai/DeepSeek-V3 \
+    --method advanced \
+    --quantization 4bit \
+    --large-model
+```
+
+<Tip>
+Run `obliteratus recommend <model>` to get a telemetry-driven method and hyperparameter recommendation for any model before you obliterate it.
+</Tip>

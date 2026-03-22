@@ -1,0 +1,81 @@
+---
+title: "HuggingFace Spaces"
+description: "Use OBLITERATUS on HuggingFace Spaces with zero setup — runs on ZeroGPU, free daily quota."
+---
+
+<Card
+  title="Open OBLITERATUS on HuggingFace Spaces"
+  icon="rocket"
+  href="https://huggingface.co/spaces/pliny-the-prompter/obliteratus"
+>
+  No installation, no GPU required. Pick a model, pick a method, click Obliterate.
+</Card>
+
+The HuggingFace Space is the fastest way to obliterate a model. It runs on ZeroGPU — each GPU-heavy operation (obliteration, chat, benchmarks) draws from the shared GPU pool using **your own HF quota**, not the Space owner's. Between calls the Space runs on CPU.
+
+<Note>
+  Telemetry is **on by default** on the Space. Every run you submit contributes anonymous benchmark data to the community research dataset — refusal directions, hardware profiles, method comparisons. You're advancing the science just by pressing the button.
+</Note>
+
+## The eight tabs
+
+<CardGroup cols={2}>
+  <Card title="Obliterate" icon="bolt">
+    One-click refusal removal with a live 6-stage progress display. Shows post-obliteration metrics: coherence score, refusal rate, perplexity, and KL divergence.
+  </Card>
+  <Card title="Benchmark" icon="chart-bar">
+    Compare methods (multi-method), compare models (multi-model), or run quick presets. Produces cross-layer heatmaps, angular drift charts, and refusal topology visualizations.
+  </Card>
+  <Card title="Chat" icon="message">
+    Talk to your freshly obliterated model in real time. Adjustable generation parameters: temperature, top-p, max tokens, repetition penalty.
+  </Card>
+  <Card title="A/B Compare" icon="code-compare">
+    Chat with the original and obliterated model side-by-side. See exactly what changed — same prompt, both answers, simultaneously.
+  </Card>
+  <Card title="Strength Sweep" icon="sliders">
+    Vary the obliteration strength across a configurable range and plot the coherence/refusal tradeoff curve. Find the sweet spot before committing.
+  </Card>
+  <Card title="Export" icon="download">
+    Download your obliterated model as a ZIP, or push it directly to your HuggingFace Hub repository with a single click.
+  </Card>
+  <Card title="Leaderboard" icon="trophy">
+    Community-aggregated results across every model, method, and hardware configuration that has contributed telemetry. See what works best before you start.
+  </Card>
+  <Card title="About" icon="book">
+    Architecture documentation, method explanations with diagrams, and the full research reference list.
+  </Card>
+</CardGroup>
+
+## How telemetry works on Spaces
+
+When you run an obliteration on the Space, the following data is automatically collected and added to the community dataset:
+
+| Field | What it contains |
+|---|---|
+| `model_name` | The HuggingFace model ID you selected |
+| `method` | The liberation method used (e.g. `advanced`, `surgical`) |
+| `refusal_rate` | Post-obliteration refusal rate on the built-in benchmark prompts |
+| `perplexity` | Language model perplexity on a held-out text corpus |
+| `coherence` | Average semantic coherence of generated completions |
+| `kl_divergence` | KL divergence from the base model's output distribution |
+| `hardware_info` | GPU model and VRAM (from ZeroGPU allocation metadata) |
+| `timestamp` | UTC timestamp of the run |
+
+**What is never collected:** prompts you typed, model outputs, your IP address, your HuggingFace username, or any information that could identify you. The full telemetry schema is in `obliteratus/telemetry.py` in the source repository.
+
+All collected data feeds the **Leaderboard tab** — a live ranking of models, methods, and configurations built entirely from community runs.
+
+## ZeroGPU limitations
+
+<Warning>
+  ZeroGPU has a **daily quota per HuggingFace account**. Free accounts get a limited number of GPU-seconds per day; HF Pro accounts get a larger allocation. If you exceed your quota, obliteration calls will queue or fail until your quota resets.
+</Warning>
+
+| Limitation | Details |
+|---|---|
+| **Model size** | Practical upper limit is approximately 8B parameters on a single ZeroGPU allocation. Larger models require a local setup or multi-GPU cloud instance. |
+| **Session persistence** | ZeroGPU allocations are per-call. The GPU is released after each operation — your obliterated model is held in the Space's persistent storage between tabs, not in GPU memory. |
+| **Concurrent users** | GPU time is shared across all Space visitors. During high-traffic periods, calls may queue for a few seconds before a GPU is allocated. |
+| **Custom datasets** | The Space uses the built-in prompt dataset for probing. For custom harmful/harmless prompt sets, use the [CLI](/usage/cli) or [Python API](/usage/python-api). |
+
+For models larger than 8B, runs that need custom prompts, or production automation, see the [Local Web UI](/usage/local-ui), [CLI](/usage/cli), or [Python API](/usage/python-api) docs.

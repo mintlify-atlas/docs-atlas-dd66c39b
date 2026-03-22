@@ -1,80 +1,165 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Get OBLITERATUS running and obliterate your first model in minutes."
 ---
 
-## Get started in three steps
+## Choose your path
 
-Get your documentation site running locally and make your first customization.
+Three ways to get started — pick the one that fits your setup.
 
-### Step 1: Set up your local environment
+<CardGroup cols={3}>
+  <Card title="HuggingFace Spaces" icon="rocket" href="/usage/huggingface-spaces">
+    Zero install. Runs on ZeroGPU with a free daily quota. Open the Space and click Obliterate.
+  </Card>
+  <Card title="Google Colab" icon="notebook" href="/usage/colab">
+    Free T4 GPU for models up to ~8B parameters. Open the notebook and hit Run All.
+  </Card>
+  <Card title="Local install" icon="terminal">
+    Full control on your own hardware. Follow the steps below.
+  </Card>
+</CardGroup>
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+## Local quickstart
 
-### Step 2: Deploy your changes
+<Steps>
+  <Step title="Install OBLITERATUS">
+    Install from PyPI or directly from the repository.
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    <CodeGroup>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    ```bash pip install
+    pip install obliteratus
+    ```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash editable install (from source)
+    git clone https://github.com/elder-plinius/OBLITERATUS
+    cd OBLITERATUS
+    pip install -e .
+    ```
 
-### Step 3: Go live
+    </CodeGroup>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    <Note>
+    Python 3.10 or higher is required. See [Installation](/installation) for platform-specific instructions, Docker usage, and hardware requirements.
+    </Note>
+  </Step>
+
+  <Step title="Obliterate your first model">
+    Run the `obliterate` command with a model from HuggingFace Hub. The `advanced` method is the default and the recommended starting point for most models.
+
+    ```bash
+    obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct --method advanced
+    ```
+
+    OBLITERATUS prints a live progress display tracking all six pipeline stages as they run. The obliterated model is saved to `abliterated/meta-llama_Llama-3.1-8B-Instruct/` by default.
+
+    To save to a custom location:
+
+    ```bash
+    obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct \
+        --method advanced \
+        --output-dir ./my-liberated-model
+    ```
+
+    <Tip>
+    Not sure which model to try? Run `obliteratus models` to browse 116 curated targets organized by VRAM requirement, or `obliteratus models --tier small` to filter to 4-8 GB models.
+    </Tip>
+  </Step>
+
+  <Step title="Understand the six pipeline stages">
+    Every obliteration run — regardless of method — passes through six stages:
+
+    | Stage | What happens |
+    |---|---|
+    | **SUMMON** | Load the model and tokenizer from HuggingFace Hub or a local path |
+    | **PROBE** | Collect hidden-state activations on a set of restricted and unrestricted prompts |
+    | **DISTILL** | Extract refusal directions from the activation contrast via SVD decomposition |
+    | **EXCISE** | Project the refusal subspace out of the model's weight matrices (norm-preserving) |
+    | **VERIFY** | Run perplexity, coherence, refusal rate, and KL divergence checks to confirm capabilities are intact |
+    | **REBIRTH** | Save the liberated model weights and a `abliteration_metadata.json` file |
+
+    The `informed` method adds an **ANALYZE** stage between PROBE and DISTILL that runs four analysis modules and uses their output to auto-configure every downstream decision.
+
+    <Note>
+    VERIFY runs automatically after every obliteration. If the Ouroboros effect is detected — meaning the model's guardrails partially reassemble after excision — additional targeted passes fire automatically at the compensating layers.
+    </Note>
+  </Step>
+
+  <Step title="Use the Python API">
+    For programmatic control, import `AbliterationPipeline` directly.
+
+    ```python
+    from obliteratus.abliterate import AbliterationPipeline
+
+    pipeline = AbliterationPipeline(
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        method="advanced",
+        output_dir="abliterated",
+    )
+    result_path = pipeline.run()
+    ```
+
+    After the run, intermediate artifacts are available on the pipeline object:
+
+    ```python
+    # Refusal directions extracted per layer
+    directions = pipeline.refusal_directions    # {layer_idx: tensor}
+
+    # Layers with the strongest refusal signal
+    strong_layers = pipeline._strong_layers
+
+    # Post-obliteration evaluation metrics
+    metrics = pipeline._quality_metrics
+    # Keys: perplexity, coherence, refusal_rate, kl_divergence
+    ```
+
+    For analysis-informed obliteration that auto-tunes every parameter:
+
+    ```python
+    from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+    pipeline = InformedAbliterationPipeline(
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        output_dir="abliterated_informed",
+    )
+    output_path, report = pipeline.run_informed()
+
+    print(f"Detected alignment: {report.insights.detected_alignment_method}")
+    print(f"Auto-configured directions: {report.insights.recommended_n_directions}")
+    print(f"Ouroboros passes needed: {report.ouroboros_passes}")
+    ```
+  </Step>
+</Steps>
+
+## What you get after obliteration
+
+The output directory contains:
+
+- **Model weights** — standard HuggingFace `safetensors` format, loadable with `AutoModelForCausalLM.from_pretrained(output_dir)`
+- **Tokenizer files** — copied from the source model unchanged
+- **`abliteration_metadata.json`** — method used, number of directions extracted, layers modified, VERIFY stage metrics (refusal rate, perplexity, coherence, KL divergence), and timestamps
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model = AutoModelForCausalLM.from_pretrained("./abliterated/meta-llama_Llama-3.1-8B-Instruct")
+tokenizer = AutoTokenizer.from_pretrained("./abliterated/meta-llama_Llama-3.1-8B-Instruct")
+```
+
+<Tip>
+Add `--contribute` to your obliterate command to save an anonymous benchmark record to the community dataset. Your run contributes refusal rate, perplexity, and coherence scores — no prompts, outputs, or identifying information.
+</Tip>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+<CardGroup cols={3}>
+  <Card title="CLI reference" icon="terminal" href="/usage/cli">
+    All commands, flags, and options for headless and scripted usage.
+  </Card>
+  <Card title="Python API" icon="code" href="/usage/python-api">
+    Full programmatic control over the pipeline and all intermediate artifacts.
+  </Card>
+  <Card title="Methods overview" icon="flask" href="/methods/overview">
+    Compare all seven obliteration methods and choose the right one for your model.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

@@ -1,0 +1,318 @@
+---
+title: "Refusal Directions"
+description: "The mathematical structure of how refusal is encoded in transformer activations and how OBLITERATUS extracts it."
+---
+
+Refusal in a language model is not a switch. It is a direction in the model's activation space — a specific geometric orientation that the model learned to associate with the "I should not comply" decision. Understanding the structure of this direction (or directions) is the foundation of abliteration.
+
+---
+
+## How transformer hidden states encode behavior
+
+At each transformer layer $l$, the residual stream carries a hidden state $\mathbf{x}_l \in \mathbb{R}^d$ for each token in the sequence. This vector is not a lookup table entry — it is a continuous point in a $d$-dimensional space that encodes everything the model has computed so far about the token and its context.
+
+Mechanistic interpretability research (Elhage et al., 2021) has shown that transformer hidden states encode factual associations, syntactic roles, and behavioral decisions as approximately linear features in this space. A direction $\mathbf{r} \in \mathbb{R}^d$ that reliably separates "the model will refuse" from "the model will comply" exists and can be extracted analytically.
+
+<Info>
+The linear representation hypothesis — that model behaviors correspond to linear directions in activation space — is empirically well-supported for refusal (Arditi et al., 2024) and many other behaviors including truthfulness, sentiment, and factual associations.
+</Info>
+
+The practical consequence: if you can identify $\mathbf{r}_l$ at each layer, you can project it out of the model's weight matrices and eliminate the behavior entirely, without touching anything else.
+
+---
+
+## Extraction methods
+
+OBLITERATUS implements four direction extraction methods, trading simplicity for precision.
+
+<AccordionGroup>
+  <Accordion title="Diff-in-means (diff_means)">
+    The simplest and most robust method. Collect last-token hidden states at layer $l$ for a set of harmful prompts $\{\mathbf{h}_i\}$ and harmless prompts $\{\mathbf{b}_i\}$, then take the normalized difference of the means:
+
+    $$\mathbf{r}_l = \frac{\bar{\mathbf{h}}_l - \bar{\mathbf{b}}_l}{\|\bar{\mathbf{h}}_l - \bar{\mathbf{b}}_l\|}$$
+
+    This produces a single unit vector pointing from the average harmless representation to the average harmful representation.
+
+    **Strengths**: Fast, needs no matrix decomposition, works on any sample size, robust to outliers in individual prompts.
+
+    **Limitations**: Extracts only one direction. If refusal is encoded across multiple orthogonal directions (as in models trained with CAI or on many harm categories), a single direction leaves residual signal.
+
+    Used by: `method="basic"`, `method="failspy"`, `method="heretic"`
+  </Accordion>
+
+  <Accordion title="SVD (svd)">
+    SVD-based extraction (Gabliteration, arXiv:2512.18901) extracts a multi-dimensional refusal subspace. Given the stacked per-prompt activations $\mathbf{H} \in \mathbb{R}^{n \times d}$ and $\mathbf{B} \in \mathbb{R}^{n \times d}$, compute the difference matrix and decompose it:
+
+    $$\mathbf{D} = \mathbf{H} - \mathbf{B}, \quad \mathbf{D} = \mathbf{U} \mathbf{S} \mathbf{V}_h^\top$$
+
+    The top-$k$ right singular vectors (rows of $\mathbf{V}_h$) form the refusal subspace. Each singular value $\sigma_i$ indicates how much of the harmful-harmless variance is explained by that direction. The primary direction is $\mathbf{r}_l = \mathbf{V}_h[0, :]$.
+
+    The strength of each layer is measured by the sum of the top-$k$ squared singular values (captured variance), not just the amplitude.
+
+    **Strengths**: Captures a subspace rather than a single direction. Handles polyhedral refusal mechanisms (different categories triggering different directions).
+
+    **Limitations**: Directions that have high absolute variance but are caused by natural activation anisotropy (not refusal) can appear in the top singular vectors. Whitened SVD addresses this.
+
+    Used by: `method="advanced"`, `method="aggressive"`, `method="surgical"`, `method="gabliteration"`
+
+    ```python
+    # SVD direction extraction (simplified from abliterate.py)
+    harmful_stack = torch.stack(harmful_acts[layer_idx]).squeeze(1)   # (n, hidden)
+    harmless_stack = torch.stack(harmless_acts[layer_idx]).squeeze(1)
+    diff_matrix = (harmful_stack - harmless_stack).float()
+
+    k = min(n_directions, diff_matrix.shape[0], diff_matrix.shape[1])
+    U, S, Vh = torch.linalg.svd(diff_matrix, full_matrices=False)
+
+    # Top-k right singular vectors = refusal subspace
+    subspace = Vh[:k]           # (k, hidden_dim)
+    primary_direction = Vh[0]   # primary refusal direction
+    refusal_variance = (S[:k] ** 2).sum()  # captured variance
+    ```
+  </Accordion>
+
+  <Accordion title="Whitened SVD (use_whitened_svd=True)">
+    Standard SVD extracts directions that maximize absolute variance in the harmful-harmless difference. But transformer activations are highly anisotropic — some dimensions have large variance across all inputs regardless of content. These "rogue dimensions" can dominate the top singular vectors without encoding any refusal-specific information.
+
+    Whitened SVD normalizes by the harmless activation covariance first, so extracted directions maximize variance *relative to the model's baseline distribution* (Oursland, 2024; Kessy et al., 2018).
+
+    **Algorithm** (implemented in `WhitenedSVDExtractor`):
+
+    1. Compute harmless covariance: $\mathbf{C}_B = \frac{1}{n-1}(\mathbf{B} - \boldsymbol{\mu}_B)^\top(\mathbf{B} - \boldsymbol{\mu}_B)$
+    2. Regularize: $\mathbf{C}_{\text{reg}} = \mathbf{C}_B + \epsilon \mathbf{I}$ where $\epsilon = 10^{-4}$
+    3. Eigendecompose: $\mathbf{C}_{\text{reg}} = \mathbf{V} \boldsymbol{\Lambda} \mathbf{V}^\top$
+    4. Truncate near-degenerate dimensions where $\lambda_i < \lambda_{\max} \cdot \tau$ ($\tau = 0.01$)
+    5. Compute whitening transform: $\mathbf{W}_{\text{proj}} = \mathbf{V}_{\text{valid}} \boldsymbol{\Lambda}_{\text{valid}}^{-1/2}$
+    6. Whiten both sets: $\mathbf{H}_w = (\mathbf{H} - \boldsymbol{\mu}_B)\mathbf{W}_{\text{proj}}$, $\mathbf{B}_w = (\mathbf{B} - \boldsymbol{\mu}_B)\mathbf{W}_{\text{proj}}$
+    7. SVD on whitened difference: $\mathbf{D}_w = \mathbf{H}_w - \mathbf{B}_w = \mathbf{U}\mathbf{S}\mathbf{V}_h^\top$
+    8. Un-whiten to original space: $\mathbf{r}_i = \mathbf{W}_{\text{unproj}} \mathbf{V}_h[i, :]^\top$
+
+    The result: directions that are genuinely unusual relative to the model's normal activation distribution, not just directions in high-variance subspaces.
+
+    ```python
+    from obliteratus.analysis.whitened_svd import WhitenedSVDExtractor
+
+    extractor = WhitenedSVDExtractor(
+        regularization_eps=1e-4,
+        min_variance_ratio=0.01,
+    )
+    result = extractor.extract(
+        harmful_activations=harmful_acts[layer_idx],
+        harmless_activations=harmless_acts[layer_idx],
+        n_directions=4,
+        layer_idx=layer_idx,
+    )
+
+    print(f"Variance explained: {result.variance_explained:.1%}")
+    print(f"Covariance condition number: {result.condition_number:.0f}")
+    print(f"Effective rank: {result.effective_rank:.1f}")
+    directions = result.directions  # (k, hidden_dim), in original space
+    ```
+
+    `WhitenedSVDResult` also carries `condition_number` and `effective_rank`. The effective rank uses Shannon entropy of normalized eigenvalues:
+
+    $$\text{EffRank}(\mathbf{C}) = \exp\!\left(-\sum_i \hat{\lambda}_i \log \hat{\lambda}_i\right), \quad \hat{\lambda}_i = \frac{\lambda_i}{\sum_j \lambda_j}$$
+
+    This is a continuous measure of the refusal subspace's intrinsic dimensionality.
+
+    Used by: `method="aggressive"`, `method="surgical"`, `method="optimized"`, `method="nuclear"`
+  </Accordion>
+
+  <Accordion title="LEACE (direction_method='leace')">
+    LEACE (Least-squares Concept Erasure) finds the theoretically optimal concept erasure direction via a generalized eigenvalue problem. Where SVD maximizes variance explained, LEACE minimizes the worst-case linear classifier accuracy after erasure — it finds the direction whose removal makes harmful and harmless activations most indistinguishable to any linear probe.
+
+    This is available via `direction_method="leace"` in the `informed` preset.
+
+    ```python
+    pipeline = AbliterationPipeline(
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        method="informed",
+        direction_method="leace",
+    )
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Refusal subspace vs. refusal direction
+
+A **refusal direction** is a single unit vector $\mathbf{r} \in \mathbb{R}^d$ that encodes refusal as a 1D axis in activation space. Projecting it out of weights removes that one axis.
+
+A **refusal subspace** is a $k$-dimensional subspace spanned by $k$ orthonormal vectors $\{\mathbf{r}_1, \ldots, \mathbf{r}_k\}$. This is necessary when refusal is encoded across multiple independent directions — for example, when different harm categories (weapons, cyber, fraud) activate geometrically distinct mechanisms.
+
+OBLITERATUS stores both:
+
+```python
+pipeline.refusal_directions   # {layer_idx: tensor(hidden_dim,)}   — primary direction
+pipeline.refusal_subspaces    # {layer_idx: tensor(k, hidden_dim)}  — full subspace
+```
+
+The projection during EXCISE uses the full subspace when `n_directions > 1`, applying sequential rank-1 projections with Gram-Schmidt re-orthogonalization between them to ensure consistency.
+
+### Concept cone geometry
+
+Wollschlager et al. (ICML 2025) showed that refusal is not always a single direction or even a clean subspace — it can form a **polyhedral concept cone**: different harm categories activate refusal directions that share a common half-space but are not parallel.
+
+The `ConceptConeAnalyzer` maps this structure by computing per-category directions and measuring their pairwise cosine similarities. The **Direction Specificity Index (DSI)** for each category:
+
+$$\text{DSI}_k = 1 - \frac{1}{K-1}\sum_{j \neq k} |\cos(\mathbf{r}_k, \mathbf{r}_j)|$$
+
+DSI ≈ 1: the category has a unique direction (specialized circuit). DSI ≈ 0: the category shares its direction with all others (monolithic mechanism).
+
+Cone geometry is classified as:
+- **Linear**: mean cosine > 0.9, effective dimensionality < 1.5 — single mechanism, diff-in-means is sufficient
+- **Polyhedral**: mean cosine < 0.8 or effective dimensionality > 2.0 — multi-mechanism, SVD or whitened SVD needed
+- **Intermediate**: between these bounds
+
+---
+
+## Layer selection
+
+Not all transformer layers carry refusal signal equally. OBLITERATUS selects which layers to modify using configurable algorithms.
+
+<Tip>
+Modifying layers that don't carry refusal signal provides no benefit and can degrade capability. The goal of layer selection is to concentrate the intervention where it matters.
+</Tip>
+
+### Knee detection
+
+The default method. Refusal strength is computed per layer (sum of top-$k$ squared singular values), layers are sorted by strength, and the "knee" — the point of maximum curvature in the sorted strength curve — is detected using the Kneedle algorithm. Layers above the knee are selected.
+
+### COSMIC layer selection
+
+From COSMIC (arXiv:2506.00085, ACL 2025): select layers where harmful and harmless representations have the **lowest cosine similarity** — the layers where refusal is most geometrically separated from normal-use representations.
+
+```python
+# COSMIC implementation from _select_layers_cosmic()
+for idx in range(n_layers):
+    h_mean = harmful_means[idx].squeeze().float()
+    b_mean = harmless_means[idx].squeeze().float()
+    cos_sim = (h_mean @ b_mean) / (h_mean.norm() * b_mean.norm())
+    # Low cosine = high separation = better abliteration target
+
+# Select bottom 10% by cosine similarity
+cos_sims.sort(key=lambda x: x[1])  # ascending = most separable first
+```
+
+OBLITERATUS fuses knee detection with COSMIC by default (`layer_selection="knee_cosmic"`), taking the union of both sets. This catches layers the knee misses (strong signal at non-obvious positions) and layers COSMIC misses (high-variance but lower-cosine layers).
+
+### Other strategies
+
+| Strategy | Used by | Behavior |
+|----------|---------|----------|
+| `all_except_first` | `failspy` | All layers except layer 0 |
+| `all` | `heretic` | All layers (Bayesian weights control strength) |
+| `top_k` | `gabliteration` | Top layers by refusal variance, 5% threshold |
+| `knee_cosmic` | Default | Knee detection + COSMIC fusion |
+
+---
+
+## Weight projection vs. bias projection
+
+Most abliteration tools only modify **weight matrices**. OBLITERATUS also projects refusal directions out of **bias terms**.
+
+When a linear layer has a bias vector $\mathbf{b} \in \mathbb{R}^d$, the bias contributes a constant offset to every token's hidden state — including along the refusal direction. Failing to project the bias leaves a permanent "always-on" refusal signal that weight projection cannot remove:
+
+$$\mathbf{b}' = \mathbf{b} - (\mathbf{b} \cdot \mathbf{r})\, \mathbf{r}$$
+
+This removes the component of the bias that points along the refusal direction.
+
+<Warning>
+Skipping bias projection leaves refusal pathways partially active in models where bias terms carry non-trivial projections onto the refusal direction. This is the most common reason single-pass abliteration underperforms: the weights are clean but the biases still push in the refusal direction.
+</Warning>
+
+Bias projection is enabled with `project_biases=True` (default in `advanced` and all stronger presets).
+
+---
+
+## Refusal topology
+
+The geometry of refusal varies significantly across models and alignment training methods. OBLITERATUS's analysis modules characterize this topology before committing to an intervention strategy.
+
+### Linear vs. polyhedral mechanisms
+
+A **linear mechanism** concentrates refusal along a single direction shared across harm categories and layers. This is characteristic of SFT-aligned models and produces high cross-layer cosine similarity. Diff-in-means is sufficient.
+
+A **polyhedral mechanism** uses distinct directions for different harm categories, forming a cone rather than a line. CAI-aligned models tend toward this structure. SVD or whitened SVD with multiple directions is required.
+
+### Alignment method fingerprinting
+
+The `AlignmentImprintDetector` extracts six geometric features from the refusal direction distribution and classifies the likely alignment training method:
+
+| Feature | DPO | RLHF | CAI | SFT |
+|---------|-----|------|-----|-----|
+| Gini coefficient | High (~0.7) | Moderate (~0.3) | Moderate (~0.4) | Very high (~0.8) |
+| Effective rank | Low (~1.5) | Higher (~3.0) | High (~4.0) | Near-1 (~1.2) |
+| Cross-layer smoothness | — | Smooth | — | — |
+| Tail-layer bias | — | — | — | Strong |
+
+This fingerprint informs the optimal removal strategy: DPO models need fewer directions and less regularization; CAI models need more directions and more passes.
+
+---
+
+## Extracting directions in code
+
+<CodeGroup>
+
+```python diff-in-means
+from obliteratus.abliterate import AbliterationPipeline
+
+# Run PROBE + DISTILL stages to get directions
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="basic",   # uses diff-in-means
+)
+pipeline._summon()
+pipeline._probe()
+pipeline._distill()
+
+# Per-layer directions
+for layer_idx in pipeline._strong_layers:
+    direction = pipeline.refusal_directions[layer_idx]
+    print(f"Layer {layer_idx}: direction shape={direction.shape}, "
+          f"norm={direction.norm():.4f}")
+```
+
+```python whitened-svd
+from obliteratus.analysis.whitened_svd import WhitenedSVDExtractor
+
+# Use the extractor directly on pre-collected activations
+extractor = WhitenedSVDExtractor(regularization_eps=1e-4)
+
+# Extract for all layers at once
+results = extractor.extract_all_layers(
+    harmful_acts=pipeline._harmful_acts,
+    harmless_acts=pipeline._harmless_acts,
+    n_directions=4,
+)
+
+for layer_idx, result in results.items():
+    print(f"Layer {layer_idx}:")
+    print(f"  Directions: {result.directions.shape}")
+    print(f"  Variance explained: {result.variance_explained:.1%}")
+    print(f"  Condition number: {result.condition_number:.0f}")
+    print(f"  Effective rank: {result.effective_rank:.1f}")
+```
+
+```python compare-methods
+from obliteratus.analysis.whitened_svd import WhitenedSVDExtractor
+
+# Compare whitened vs standard SVD alignment
+extractor = WhitenedSVDExtractor()
+result = extractor.extract(
+    harmful_activations=harmful_acts[layer_idx],
+    harmless_activations=harmless_acts[layer_idx],
+    n_directions=4,
+)
+
+standard_dir = pipeline.refusal_directions[layer_idx]
+comparison = WhitenedSVDExtractor.compare_with_standard(result, standard_dir)
+
+print(f"Primary direction cosine: {comparison['primary_direction_cosine']:.3f}")
+print(f"Subspace principal cosine: {comparison['subspace_principal_cosine']:.3f}")
+# High cosine: whitening didn't change much (low anisotropy model)
+# Low cosine: whitening found genuinely different directions
+```
+
+</CodeGroup>

@@ -1,0 +1,141 @@
+---
+title: "Methods Overview"
+description: "Compare all seven obliteration methods to pick the right one for your use case."
+---
+
+OBLITERATUS ships with seven weight-projection presets and one analysis-informed pipeline. Each preset is a named bundle of parameters in the `METHODS` dict — you select one with `--method` on the CLI or `method=` in the Python API.
+
+## The seven presets
+
+| Method | Directions | Direction extraction | Key features | Best for |
+|--------|-----------|---------------------|--------------|----------|
+| `basic` | 1 | diff-in-means | Fast baseline, no norm preservation | Quick tests, small models, first runs |
+| `advanced` | 4 | SVD | Norm-preserving biprojection, bias projection, 2 refinement passes | **Default.** Clean removal, minimal capability loss |
+| `aggressive` | 8 | Whitened SVD | Jailbreak contrast, layer-adaptive strength, head surgery, winsorization, 3 passes | Maximum guardrail removal |
+| `surgical` | 8 | Whitened SVD | Expert-Granular Abliteration (EGA), SAE features, safety-neuron masking, MoE-aware | Precision MoE models (DeepSeek, Qwen MoE) |
+| `optimized` | 4 | Whitened SVD | Bayesian auto-tune (Optuna TPE, 50 trials), CoT-aware ablation, KL co-optimization | Best quality when compute budget allows optimization |
+| `inverted` | 8 | Whitened SVD | 2× orthogonal reflection (semantic inversion), per-expert MoE routing | Refusal inversion experiments |
+| `nuclear` | 4 | Whitened SVD | All techniques + expert transplant (10% blend) + activation steering, 1.25× reflection | Maximum force on stubborn MoE models |
+
+Plus the **`informed`** method, which uses `InformedAbliterationPipeline` to run four analysis modules between PROBE and DISTILL and auto-configure every parameter. See [Analysis-Informed Pipeline](/methods/informed-pipeline).
+
+## Two intervention paradigms
+
+### Weight projection (permanent)
+
+All seven presets above modify the model's weights directly. The refusal subspace is projected out of every weight matrix in the selected layers. The change is baked into the saved model — no runtime overhead, no hooks, no adapters.
+
+The core operation for each weight matrix `W` and refusal direction `r`:
+
+```
+W_new = W - W @ r @ r^T         # basic projection
+W_new = W - (1 - λ) * W @ r @ r^T  # regularized (λ = regularization)
+```
+
+With `norm_preserve=True` (all methods except `basic`), the original Frobenius norm of `W` is restored after projection — this is grimjim's norm-preserving biprojection (2025).
+
+### Steering vectors (reversible)
+
+Alternatively, you can apply refusal removal at inference time without touching weights. Steering vectors inject an activation offset at specific layers during the forward pass and can be removed at any time.
+
+```python
+from obliteratus.analysis import SteeringVectorFactory, SteeringHookManager
+from obliteratus.analysis.steering_vectors import SteeringConfig
+
+# Build a steering vector from a refusal direction
+vec = SteeringVectorFactory.from_refusal_direction(refusal_dir, alpha=-1.0)
+
+# Or from contrastive activation pairs
+vec = SteeringVectorFactory.from_contrastive_pairs(harmful_acts, harmless_acts)
+
+# Apply at inference time — weights unchanged
+config = SteeringConfig(vectors=[vec], target_layers=[10, 11, 12, 13, 14, 15])
+manager = SteeringHookManager()
+manager.install(model, config)
+output = model.generate(input_ids)
+
+# Remove steering — model is back to its original state
+manager.remove()
+```
+
+Based on [Turner et al. (2023)](https://arxiv.org/abs/2308.10248) and [Rimsky et al. (2024)](https://arxiv.org/abs/2312.06681). Advantages: fully reversible, tunable `alpha`, composable with multiple vectors, no weight modification.
+
+## How to select a method
+
+<Steps>
+  <Step title="Just testing or first run?">
+    Use **`basic`**. Single direction, no frills, runs fast on any hardware. Good for verifying the pipeline works on your model before committing to a longer run.
+  </Step>
+  <Step title="Standard production use?">
+    Use **`advanced`** (the default). Four SVD directions, norm-preserving biprojection, bias projection, and two iterative refinement passes. Consistently good balance between refusal removal and capability preservation.
+  </Step>
+  <Step title="Need maximum refusal removal?">
+    Use **`aggressive`**. Eight whitened-SVD directions, jailbreak-contrastive refinement, attention head surgery, and three refinement passes. Accepts higher risk of capability drift in exchange for more complete removal.
+  </Step>
+  <Step title="Working with a MoE model?">
+    Use **`surgical`**. Expert-Granular Abliteration (EGA) decomposes refusal signals into per-expert components using router logits, so each expert gets its own direction rather than a single shared one. Required for models like DeepSeek-V3, Qwen MoE, and GLM-4 MoE.
+  </Step>
+  <Step title="Capability preservation is critical?">
+    Use **`optimized`**. Bayesian optimization via Optuna TPE runs 50 trials to find the per-layer ablation strengths that minimize the (refusal rate, KL divergence) Pareto front. CoT-Aware Ablation preserves reasoning directions. Takes longer but produces measurably better quality metrics.
+  </Step>
+  <Step title="Want analysis to auto-configure everything?">
+    Use **`informed`**. Runs four analysis modules (Alignment Imprint, Concept Cone Geometry, Cross-Layer Alignment, Defense Robustness) between PROBE and DISTILL, then derives `n_directions`, `regularization`, `refinement_passes`, and the layer set automatically. Uses `InformedAbliterationPipeline` instead of the standard `AbliterationPipeline`.
+  </Step>
+  <Step title="Stubborn model that resists removal?">
+    Use **`nuclear`**. All techniques combined: whitened SVD, EGA, attention head surgery, SAE features, activation steering, expert transplant (10% capability-expert blend into safety experts), and tempered 1.25× reflection. Tuned specifically for multi-pass safety reasoning architectures (visible CoT policy-check models).
+  </Step>
+</Steps>
+
+## The `--method` flag and `method=` parameter
+
+<CodeGroup>
+```bash CLI
+# Use the default (advanced)
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct
+
+# Specify a method explicitly
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct --method surgical
+
+# Override individual parameters on top of any method
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct \
+    --method advanced \
+    --n-directions 6 \
+    --refinement-passes 3
+```
+
+```python Python API
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",           # any key from METHODS dict
+    output_dir="abliterated",
+    # individual params override method defaults:
+    n_directions=6,
+    refinement_passes=3,
+)
+result = pipeline.run()
+```
+</CodeGroup>
+
+Every explicit parameter you pass overrides the corresponding value from the method preset. The method preset fills in everything you don't specify.
+
+## Method pages
+
+<CardGroup cols={2}>
+  <Card title="Basic" href="/methods/basic">
+    Single diff-in-means direction. Fastest, simplest baseline.
+  </Card>
+  <Card title="Advanced (Default)" href="/methods/advanced">
+    4 SVD directions, norm-preserving biprojection, bias projection, 2 passes.
+  </Card>
+  <Card title="Surgical" href="/methods/surgical">
+    Expert-Granular Abliteration for MoE models. SAE, head surgery, layer-adaptive strength.
+  </Card>
+  <Card title="Optimized" href="/methods/optimized">
+    Bayesian auto-tuned with CoT-aware ablation and KL co-optimization.
+  </Card>
+  <Card title="Analysis-Informed Pipeline" href="/methods/informed-pipeline">
+    Closes the analysis-to-removal loop. Auto-configures every parameter from 4 analysis modules.
+  </Card>
+</CardGroup>

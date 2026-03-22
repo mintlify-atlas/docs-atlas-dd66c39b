@@ -1,0 +1,128 @@
+---
+title: "Concept Cone Geometry"
+description: "Map the geometric structure of refusal — how many distinct mechanisms exist, per-category directions, solid angles."
+---
+
+`ConceptConeAnalyzer` tests whether refusal is a single linear direction or a polyhedral cone with multiple distinct mechanisms. This distinction has a direct practical consequence: if refusal is polyhedral, extracting only one SVD direction leaves other components intact and the model may continue to refuse on specific categories.
+
+<Info>
+Based on Wollschlager et al. (2025), "Geometry of Concepts in LLMs" (arXiv:2502.17420), which showed that refusal is a *polyhedral concept cone* — different harm categories activate geometrically distinct directions that share a half-space but are not collinear.
+</Info>
+
+## What concept cones are
+
+A **concept cone** is the set of all directions in the model's activation space that correspond to a given concept — here, refusal. Rather than a single vector, it's a region of the unit hypersphere bounded by the per-category refusal directions.
+
+OBLITERATUS fits the minimal enclosing cone containing all per-category directions and characterizes it by:
+
+- **Solid angle** (steradians): how wide the cone is — larger means more diverse refusal mechanisms
+- **Cone dimensionality**: effective number of independent directions inside the cone
+- **`is_linear`**: True if the cone is essentially 1D — all categories share one direction
+- **`is_polyhedral`**: True if distinct per-category directions are detected
+
+## Per-category directions
+
+OBLITERATUS uses a built-in mapping of harmful prompts to 10 harm categories:
+
+| Category | Example harm type |
+|----------|-------------------|
+| `weapons` | Weapon synthesis, modification |
+| `cyber` | Hacking, malware, exploitation |
+| `fraud` | Financial fraud, scams |
+| `intrusion` | Unauthorized access |
+| `substances` | Drug synthesis |
+| `extremism` | Radicalization content |
+| `stalking` | Surveillance, tracking |
+| `privacy` | Personal data extraction |
+| `manipulation` | Psychological manipulation |
+| `self_harm` | Self-harm instructions |
+
+For each category with sufficient prompts, a separate mean-difference direction is computed. The analyzer then measures pairwise cosines between all category directions.
+
+## Direction Specificity Index (DSI)
+
+The DSI quantifies how category-specific each refusal direction is:
+
+- **DSI near 0**: The direction is a general-purpose refusal signal activated by all categories equally
+- **DSI near 1**: The direction is unique to one category — removing it won't affect refusal for other categories
+
+High DSI on most directions indicates polyhedral structure; low DSI everywhere indicates a single linear mechanism.
+
+## Python usage
+
+```python
+from obliteratus.analysis import ConceptConeAnalyzer
+
+analyzer = ConceptConeAnalyzer()
+
+# Analyze cone geometry for a single layer
+result = analyzer.analyze_layer(
+    harmful_activations=harmful_acts,    # list of (hidden_dim,) tensors
+    harmless_activations=harmless_acts,
+    harm_categories=harm_categories,     # dict[prompt_idx, str] — optional, uses defaults
+    layer_idx=layer_idx,
+)
+
+print(f"Is linear: {result.is_linear}")
+print(f"Is polyhedral: {result.is_polyhedral}")
+print(f"Cone dimensionality: {result.cone_dimensionality:.2f}")
+print(f"Cone solid angle: {result.cone_solid_angle:.4f} sr")
+print(f"Mean pairwise cosine: {result.mean_pairwise_cosine:.3f}")
+
+# Per-category direction specificity
+for cat_dir in result.category_directions:
+    print(f"  {cat_dir.category}: strength={cat_dir.strength:.3f}  "
+          f"DSI={cat_dir.specificity:.3f}  n={cat_dir.n_prompts}")
+
+# Pairwise cosines between categories
+for (cat_a, cat_b), cosine in result.pairwise_cosines.items():
+    print(f"  {cat_a} vs {cat_b}: {cosine:.3f}")
+```
+
+```python
+# Multi-layer analysis
+multi_result = analyzer.analyze_all_layers(
+    model=model,
+    tokenizer=tokenizer,
+    harmful_prompts=harmful_prompts,
+    harmless_prompts=harmless_prompts,
+    harm_categories=harm_categories,
+    target_layers=pipeline._strong_layers,
+)
+
+print(f"Most polyhedral layer: {multi_result.most_polyhedral_layer}")
+print(f"Mean cone dimensionality: {multi_result.mean_cone_dimensionality:.2f}")
+
+# Per-layer cone complexity
+for layer_idx, complexity in multi_result.cone_complexity_by_layer.items():
+    print(f"  Layer {layer_idx:3d}: dimensionality={complexity:.2f}")
+```
+
+## How this feeds into `n_directions` selection
+
+Cone geometry directly controls how many SVD directions the informed pipeline extracts:
+
+| `cone_dimensionality` | Recommended `n_directions` | Rationale |
+|----------------------|---------------------------|----------|
+| < 1.3 | 1 | Essentially linear — one direction covers all categories |
+| 1.3 – 2.5 | 2–4 | Mild polyhedral structure |
+| 2.5 – 4.0 | 4–6 | Moderate complexity |
+| > 4.0 | 6–8 | High complexity — multiple independent mechanisms |
+
+```python
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+pipeline = InformedAbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_informed",
+)
+output_path, report = pipeline.run_informed()
+
+# Cone geometry drove n_directions selection
+print(f"Cone dimensionality: {report.insights.cone_dimensionality:.2f}")
+print(f"Directions used: {report.insights.recommended_n_directions}")
+```
+
+<Tip>
+If the analyzer reports `is_polyhedral=True` and you're using the `basic` or `advanced` methods (which extract 1–4 directions), consider switching to `surgical` or running the `informed` pipeline, which will auto-select the right number of directions.
+</Tip>

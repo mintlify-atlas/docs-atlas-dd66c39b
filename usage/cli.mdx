@@ -1,0 +1,342 @@
+---
+title: "CLI Reference"
+description: "Use OBLITERATUS from the command line for headless, scriptable obliteration."
+---
+
+All OBLITERATUS functionality is available from the command line. Install the base package (no `[spaces]` extra needed for CLI-only use):
+
+```bash
+pip install -e .
+```
+
+Every command starts with `obliteratus` (or the backward-compatible `abliterate` alias for the `obliterate` subcommand — see below).
+
+---
+
+## obliterate
+
+The primary command. Removes refusal directions from a model using the full multi-technique pipeline.
+
+```bash
+obliteratus obliterate MODEL [OPTIONS]
+```
+
+### Arguments
+
+| Argument | Description |
+|---|---|
+| `MODEL` | HuggingFace model name or local path (e.g. `meta-llama/Llama-3.1-8B-Instruct`) |
+
+### Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--method` | `advanced` | Liberation method. One of: `basic`, `advanced`, `aggressive`, `spectral_cascade`, `informed`, `surgical`, `optimized`, `inverted`, `nuclear` |
+| `--output-dir DIR` | `abliterated/<model>` | Directory to save the obliterated model |
+| `--device DEVICE` | `auto` | Device: `auto`, `cuda`, `mps`, `cpu` |
+| `--dtype DTYPE` | `float16` | Model precision: `float16`, `bfloat16`, `float32` |
+| `--n-directions N` | method default | Override number of refusal directions to extract |
+| `--direction-method` | method default | Direction extraction algorithm: `diff_means`, `svd`, `leace` |
+| `--regularization FLOAT` | method default | Fraction of the direction to preserve (0.0–1.0). Higher = more conservative. |
+| `--refinement-passes N` | method default | Number of iterative refinement passes |
+| `--quantization` | none | Load with `4bit` or `8bit` quantization (requires `bitsandbytes`) |
+| `--large-model` | off | Conservative defaults for 120B+ models: fewer directions, 1 pass, lower SAE expansion |
+| `--verify-sample-size N` | `30` | Number of harmful prompts to test for refusal rate. Increase to 100 for ~1% resolution confidence intervals. |
+| `--contribute` | off | Save a community contribution JSON after the run completes |
+| `--contribute-notes TEXT` | `""` | Notes to include with the contribution (e.g. hardware info, prompt set used) |
+
+### Examples
+
+<CodeGroup>
+
+```bash Basic run
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct
+```
+
+```bash Specify method
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct --method surgical
+```
+
+```bash Full options
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct \
+    --method surgical \
+    --output-dir ./liberated \
+    --contribute \
+    --contribute-notes "A100 80GB, default prompts"
+```
+
+```bash With quantization (large models)
+obliteratus obliterate meta-llama/Llama-3.1-70B-Instruct \
+    --method advanced \
+    --quantization 4bit \
+    --large-model
+```
+
+```bash Tight verify (research use)
+obliteratus obliterate mistralai/Mistral-7B-Instruct-v0.3 \
+    --method advanced \
+    --verify-sample-size 100
+```
+
+</CodeGroup>
+
+The command runs the 6-stage pipeline with a live Rich terminal display:
+
+```
+[1/6] SUMMON   → load model + tokenizer
+[2/6] PROBE    → collect activations on restricted vs. unrestricted prompts
+[3/6] DISTILL  → extract refusal directions via SVD
+[4/6] EXCISE   → surgically project out guardrail directions (norm-preserving)
+[5/6] VERIFY   → perplexity + coherence checks
+[6/6] REBIRTH  → save the liberated model with full metadata
+```
+
+### Backward-compat alias
+
+`abliterate` is a hidden alias for `obliterate` — all flags are identical:
+
+```bash
+obliteratus abliterate meta-llama/Llama-3.1-8B-Instruct --method advanced
+```
+
+---
+
+## run
+
+Run a full ablation study defined in a YAML configuration file.
+
+```bash
+obliteratus run CONFIG [OPTIONS]
+```
+
+| Argument/Flag | Description |
+|---|---|
+| `CONFIG` | Path to a YAML config file |
+| `--output-dir DIR` | Override the `output_dir` field from the YAML |
+| `--preset NAME` | Apply a named preset (`quick`, `full`, `attention`, `jailbreak`, `guardrail`, etc.) — overrides strategy/sample fields in the YAML |
+
+```bash
+# Run a study from a YAML config
+obliteratus run examples/gpt2_layer_ablation.yaml
+
+# Override output directory
+obliteratus run my_study.yaml --output-dir /data/results/run_01
+
+# Apply the jailbreak preset to an existing config
+obliteratus run my_study.yaml --preset jailbreak
+```
+
+See [YAML Configs](/usage/yaml-configs) for the full config schema.
+
+---
+
+## interactive
+
+Guided interactive setup — walks through hardware detection, model selection, preset or custom strategy selection, and launches the run. No flags required.
+
+```bash
+obliteratus interactive
+```
+
+The interactive flow:
+1. **Hardware** — auto-detects your GPU tier (tiny/small/medium/large), you confirm or override
+2. **Model** — shows models appropriate for your tier from the 116-model registry; enter `0` for a custom HuggingFace ID
+3. **Preset or custom** — pick one of the 10 study presets, or choose strategies and sample count manually
+4. **Confirmation** — shows the full config summary before starting
+
+---
+
+## models
+
+Browse the 116-model curated registry, optionally filtered by compute tier.
+
+```bash
+obliteratus models [--tier TIER]
+```
+
+| Flag | Description |
+|---|---|
+| `--tier TIER` | Filter by `tiny`, `small`, `medium`, `large`, or `frontier` |
+
+```bash
+# Show all 116 models
+obliteratus models
+
+# Show only models that fit in 4-8 GB VRAM
+obliteratus models --tier small
+
+# Show frontier models (multi-GPU)
+obliteratus models --tier frontier
+```
+
+---
+
+## presets
+
+List the 10 built-in ablation study presets with their strategies, sample counts, and descriptions.
+
+```bash
+obliteratus presets
+```
+
+Example output:
+
+| Key | Name | Strategies | Samples | Description |
+|---|---|---|---|---|
+| `quick` | Quick Scan | layer + FFN | 25 | Fast sanity check |
+| `full` | Full Study | all 4 | 200 | Complete component sweep |
+| `jailbreak` | Jailbreak Circuit | layer + head + FFN | 400 | Refusal circuit localization |
+| `guardrail` | Safety Ablation | all 4 | 300 | Full safety component sweep |
+
+---
+
+## strategies
+
+List all available ablation strategies registered in `STRATEGY_REGISTRY`.
+
+```bash
+obliteratus strategies
+```
+
+Current strategies: `layer_removal`, `head_pruning`, `ffn_ablation`, `embedding_ablation`.
+
+---
+
+## info
+
+Load a model and print its architecture summary without running any ablation.
+
+```bash
+obliteratus info MODEL [--task TASK] [--device DEVICE] [--dtype DTYPE]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `MODEL` | — | HuggingFace model name or path |
+| `--task` | `causal_lm` | Task type: `causal_lm` or `classification` |
+| `--device` | `cpu` | Device to load on |
+| `--dtype` | `float32` | Load dtype |
+
+```bash
+# Inspect architecture before committing to an obliteration
+obliteratus info meta-llama/Llama-3.1-8B-Instruct
+obliteratus info gpt2 --task causal_lm --device cpu
+```
+
+---
+
+## ui
+
+Launch the Gradio web UI locally. See [Local Web UI](/usage/local-ui) for the full reference.
+
+```bash
+obliteratus ui [--port PORT] [--host HOST] [--share] [--no-browser] [--auth user:pass] [--quiet]
+```
+
+---
+
+## report
+
+Regenerate an HTML/PNG report from a previously saved `results.json` file.
+
+```bash
+obliteratus report RESULTS_JSON [--output-dir DIR]
+```
+
+| Argument/Flag | Description |
+|---|---|
+| `RESULTS_JSON` | Path to a `results.json` from a previous run |
+| `--output-dir DIR` | Where to save regenerated plots (defaults to same directory as the JSON) |
+
+```bash
+obliteratus report results/gpt2_layers/results.json
+obliteratus report results/gpt2_layers/results.json --output-dir ./plots
+```
+
+---
+
+## aggregate
+
+Aggregate community contribution JSON files into a summary table.
+
+```bash
+obliteratus aggregate [--dir DIR]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dir DIR` | `community_results` | Directory containing contribution JSON files |
+
+```bash
+# Summarize all local contributions
+obliteratus aggregate
+
+# Aggregate from a custom directory
+obliteratus aggregate --dir /data/obliteratus_contribs
+```
+
+Outputs a Rich table with model, method, run count, mean refusal rate, and mean perplexity.
+
+---
+
+## recommend
+
+Fetch telemetry-driven method recommendations for a specific model.
+
+```bash
+obliteratus recommend MODEL [--device DEVICE] [--dtype DTYPE] [--insights]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `MODEL` | — | HuggingFace model name or path |
+| `--device` | `cpu` | Device to use for architecture detection |
+| `--dtype` | `float32` | Dtype for architecture detection |
+| `--insights` | off | Also show global cross-architecture insights from aggregated telemetry |
+
+```bash
+# Get a recommendation for Llama-3.1-8B
+obliteratus recommend meta-llama/Llama-3.1-8B-Instruct
+
+# With global cross-architecture insights
+obliteratus recommend mistralai/Mistral-7B-Instruct-v0.3 --insights
+```
+
+---
+
+## tourney
+
+Run a March Madness-style elimination tournament across all methods on a single model. The winner is auto-pushed to HuggingFace Hub.
+
+```bash
+obliteratus tourney MODEL [OPTIONS]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `MODEL` | — | HuggingFace model name/path |
+| `--hub-org ORG` | none | HuggingFace org to push the winner to |
+| `--hub-repo REPO` | none | Full HF repo ID (overrides `--hub-org`) |
+| `--device` | `auto` | Device |
+| `--dtype` | `float16` | Precision |
+| `--dataset` | `builtin` | Dataset source for evaluation |
+| `--quantization` | none | `4bit` or `8bit` quantization |
+| `--output-dir DIR` | `/tmp/obliteratus_tourney` | Where to save bracket and per-method outputs |
+| `--methods METHOD...` | all eligible | Space-separated list to restrict which methods compete |
+
+```bash
+# Full tournament, push winner to Hub
+obliteratus tourney meta-llama/Llama-3.1-8B-Instruct \
+    --hub-org my-org
+
+# Tournament between three specific methods only
+obliteratus tourney mistralai/Mistral-7B-Instruct-v0.3 \
+    --methods advanced surgical informed
+
+# With quantization for a larger model
+obliteratus tourney meta-llama/Llama-3.1-70B-Instruct \
+    --quantization 4bit \
+    --hub-org my-org
+```
+
+The tournament scores each method using a composite metric: 35% refusal removal, 25% coherence, 20% KL divergence, 10% perplexity, 5% spectral certification, with a degenerate-output penalty. Methods are eliminated in rounds; the champion is saved to `tourney_bracket.md`.

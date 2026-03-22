@@ -1,0 +1,310 @@
+---
+title: "YAML Configs"
+description: "Define reproducible ablation studies as YAML configuration files."
+---
+
+YAML configs let you define a full ablation study in a version-controllable file and run it with a single command. This is the recommended approach for reproducible research.
+
+```bash
+obliteratus run config.yaml
+```
+
+## Full schema
+
+Every field with a default is optional:
+
+```yaml
+# ── Model ────────────────────────────────────────────────────
+model:
+  name: meta-llama/Llama-3.1-8B-Instruct   # required: HF model ID or local path
+  task: causal_lm                           # "causal_lm" or "classification" (default: causal_lm)
+  dtype: float16                            # "float32", "float16", "bfloat16" (default: float32)
+  device: cuda                              # "auto", "cuda", "mps", "cpu" (default: auto)
+  trust_remote_code: false                  # set true for custom architectures (default: false)
+
+# ── Dataset ──────────────────────────────────────────────────
+dataset:
+  name: wikitext                            # required: HF dataset name
+  subset: wikitext-2-raw-v1                 # dataset config/subset (optional)
+  split: test                               # dataset split (default: test)
+  text_column: text                         # column to use for text (default: text)
+  label_column: label                       # column for labels — classification only (default: label)
+  max_samples: 100                          # cap sample count (optional, default: all)
+
+# ── Strategies ───────────────────────────────────────────────
+strategies:                                 # required (unless using a preset)
+  - name: layer_removal
+    params: {}                              # strategy-specific params
+  - name: head_pruning
+    params: {}
+  - name: ffn_ablation
+    params: {}
+  - name: embedding_ablation
+    params:
+      chunk_size: 48                        # ablate this many embedding dims at a time
+
+# ── Metrics ──────────────────────────────────────────────────
+metrics:                                    # default: [perplexity]
+  - perplexity
+
+# ── Run settings ─────────────────────────────────────────────
+batch_size: 4                               # default: 8
+max_length: 256                             # token truncation length (default: 512)
+output_dir: results/my_run                  # where to save results (default: results)
+
+# ── Preset (optional) ────────────────────────────────────────
+# preset: quick                             # applies a named preset as a base
+                                            # (strategies/metrics/batch_size/max_length/max_samples
+                                            #  all come from the preset; any explicit keys override)
+```
+
+## Strategies
+
+Four strategies are available. All can be combined in a single run.
+
+<Accordion title="layer_removal">
+Zeros out entire transformer layers one at a time and measures impact.
+
+```yaml
+strategies:
+  - name: layer_removal
+    params: {}    # no required params
+```
+
+**Use case:** Find which layers matter most. Layers where removal causes the largest perplexity spike are the most important; layers with minimal impact are candidates for removal in model compression.
+</Accordion>
+
+<Accordion title="head_pruning">
+Zeros out individual attention heads.
+
+```yaml
+strategies:
+  - name: head_pruning
+    params: {}    # no required params
+```
+
+**Use case:** Locate behavioral circuits. Refusal circuits in safety-trained models are often concentrated in a small number of attention heads.
+</Accordion>
+
+<Accordion title="ffn_ablation">
+Zeros out feed-forward network blocks.
+
+```yaml
+strategies:
+  - name: ffn_ablation
+    params: {}    # no required params
+```
+
+**Use case:** Identify where factual knowledge is stored (knowledge is predominantly in FFN weights per Meng et al. 2022).
+</Accordion>
+
+<Accordion title="embedding_ablation">
+Zeros out contiguous ranges of embedding dimensions.
+
+```yaml
+strategies:
+  - name: embedding_ablation
+    params:
+      chunk_size: 48    # ablate this many dims at a time (required)
+                        # GPT-2 has 768 dims → 16 chunks at chunk_size=48
+                        # Llama-3.1-8B has 4096 dims → 85 chunks at chunk_size=48
+```
+
+**Use case:** Analyze representation structure. Reveals which embedding dimensions carry the most information.
+</Accordion>
+
+## Example configs
+
+<Tabs>
+  <Tab title="Layer + FFN (GPT-2)">
+    From `examples/gpt2_layer_ablation.yaml`:
+
+    ```yaml
+    # Run with: obliteratus run examples/gpt2_layer_ablation.yaml
+
+    model:
+      name: gpt2
+      task: causal_lm
+      dtype: float32
+      device: cpu  # change to "cuda" or "auto" for GPU
+
+    dataset:
+      name: wikitext
+      subset: wikitext-2-raw-v1
+      split: test
+      text_column: text
+      max_samples: 100
+
+    strategies:
+      - name: layer_removal
+        params: {}
+      - name: ffn_ablation
+        params: {}
+
+    metrics:
+      - perplexity
+
+    batch_size: 4
+    max_length: 256
+    output_dir: results/gpt2_layers
+    ```
+  </Tab>
+  <Tab title="All strategies (GPT-2)">
+    From `examples/full_study.yaml`:
+
+    ```yaml
+    # Run with: obliteratus run examples/full_study.yaml
+
+    model:
+      name: gpt2
+      task: causal_lm
+      dtype: float32
+      device: cpu
+
+    dataset:
+      name: wikitext
+      subset: wikitext-2-raw-v1
+      split: test
+      text_column: text
+      max_samples: 50
+
+    strategies:
+      - name: layer_removal
+        params: {}
+      - name: head_pruning
+        params: {}
+      - name: ffn_ablation
+        params: {}
+      - name: embedding_ablation
+        params:
+          chunk_size: 48
+
+    metrics:
+      - perplexity
+
+    batch_size: 4
+    max_length: 256
+    output_dir: results/gpt2_full
+    ```
+  </Tab>
+  <Tab title="Preset (quick)">
+    From `examples/preset_quick.yaml`:
+
+    ```yaml
+    # Run with: obliteratus run examples/preset_quick.yaml
+
+    preset: quick
+
+    model:
+      name: gpt2
+      task: causal_lm
+      dtype: float32
+      device: cpu
+
+    dataset:
+      name: wikitext
+      subset: wikitext-2-raw-v1
+      split: test
+      text_column: text
+
+    output_dir: results/gpt2_quick
+    ```
+
+    The `quick` preset supplies `strategies`, `metrics`, `batch_size`, `max_length`, and `max_samples` automatically. Any field you specify in the YAML overrides the preset value.
+  </Tab>
+  <Tab title="Attention heads only">
+    From `examples/gpt2_head_ablation.yaml`:
+
+    ```yaml
+    # Run with: obliteratus run examples/gpt2_head_ablation.yaml
+
+    model:
+      name: gpt2
+      task: causal_lm
+      dtype: float32
+      device: cpu
+
+    dataset:
+      name: wikitext
+      subset: wikitext-2-raw-v1
+      split: test
+      text_column: text
+      max_samples: 50
+
+    strategies:
+      - name: head_pruning
+        params: {}
+
+    metrics:
+      - perplexity
+
+    batch_size: 4
+    max_length: 256
+    output_dir: results/gpt2_heads
+    ```
+  </Tab>
+</Tabs>
+
+## Presets
+
+Presets are named configurations that populate `strategies`, `metrics`, `batch_size`, `max_length`, and `max_samples` for you. Use them either inline in a YAML file or via the `--preset` flag:
+
+```bash
+# Inline: set the preset key in your YAML
+obliteratus run my_study.yaml
+
+# Flag: apply a preset on top of an existing config
+obliteratus run my_study.yaml --preset jailbreak
+```
+
+When both are present, the `--preset` flag wins over the inline `preset:` key.
+
+| Preset | Strategies | Samples | Purpose |
+|---|---|---|---|
+| `quick` | layer + FFN | 25 | Fast sanity check |
+| `full` | all 4 | 200 | Complete component sweep |
+| `attention` | head pruning | 100 | Attention circuit analysis |
+| `layers` | layer + FFN | 150 | Layer importance ranking |
+| `knowledge` | FFN + embedding | 150 | Knowledge localization |
+| `pruning` | head + FFN | 200 | Compression candidates |
+| `embeddings` | embedding | 100 | Representation structure |
+| `jailbreak` | layer + head + FFN | 400 | Refusal circuit localization |
+| `guardrail` | all 4 | 300 | Full safety ablation |
+| `robustness` | all 4 | 500 | Stress testing |
+
+## Output directory structure
+
+After a run, `output_dir` contains:
+
+```
+results/gpt2_layers/
+├── results.json          # full results: all ablation outcomes + baseline metrics
+├── impact.png            # bar chart: per-component metric impact
+├── heatmap.png           # layer × strategy heatmap
+└── report.html           # self-contained HTML report (open in browser)
+```
+
+`results.json` schema:
+
+```json
+{
+  "model_name": "gpt2",
+  "baseline_metrics": { "perplexity": 29.4 },
+  "results": [
+    {
+      "strategy": "layer_removal",
+      "component": "layer_0",
+      "description": "Remove transformer block 0",
+      "metrics": { "perplexity": 31.2 },
+      "metadata": { "layer_idx": 0 }
+    },
+    ...
+  ]
+}
+```
+
+Regenerate plots from a saved `results.json` at any time:
+
+```bash
+obliteratus report results/gpt2_layers/results.json
+```

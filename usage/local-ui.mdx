@@ -1,0 +1,137 @@
+---
+title: "Local Web UI"
+description: "Run the same Gradio interface as the HuggingFace Space on your own hardware."
+---
+
+The `obliteratus ui` command launches the identical Gradio interface that runs on HuggingFace Spaces — all eight tabs, same layout — but on your own GPU with no quota limits, no size restrictions, and full access to local model paths.
+
+## Installation
+
+The web UI requires the `spaces` extra, which installs Gradio and its dependencies:
+
+```bash
+pip install -e ".[spaces]"
+```
+
+<Note>
+  The base `pip install -e .` install does **not** include Gradio. If you run `obliteratus ui` without the `spaces` extra installed, the command will print a clear error and exit.
+</Note>
+
+## Launching the UI
+
+<Steps>
+  <Step title="Run obliteratus ui">
+    ```bash
+    obliteratus ui
+    ```
+
+    The command prints the OBLITERATUS banner, detects your hardware, shows a system info panel, and displays hardware-appropriate model recommendations before Gradio starts loading.
+  </Step>
+
+  <Step title="Wait for the UI to load">
+    The first launch downloads the Gradio app bundle and initializes the model registry. Subsequent launches are faster. You'll see:
+
+    ```
+    Loading OBLITERATUS UI (this may take a moment on first run)...
+    UI loaded in 3.2s
+    ```
+  </Step>
+
+  <Step title="Open in your browser">
+    The UI opens automatically at `http://localhost:7860`. Use `--no-browser` to suppress this if you're running on a remote server.
+  </Step>
+</Steps>
+
+## Command options
+
+```bash
+obliteratus ui [OPTIONS]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--port PORT` | `7860` | Server port |
+| `--host HOST` | `0.0.0.0` | Server host. `0.0.0.0` binds to all interfaces (accessible from the network). |
+| `--share` | off | Generate a public Gradio share link (tunneled via Gradio's relay servers) |
+| `--no-browser` | off | Do not auto-open the browser on launch |
+| `--auth user:pass` | none | Enable HTTP basic auth. Provide as a single `user:pass` string. |
+| `--quiet` | off | Suppress the startup banner, system info panel, and model recommendations |
+
+### Examples
+
+<CodeGroup>
+
+```bash Custom port
+obliteratus ui --port 8080
+```
+
+```bash Public share link
+obliteratus ui --share
+```
+
+```bash Remote server (no browser, with auth)
+obliteratus ui --no-browser --auth admin:secret123
+```
+
+```bash Quiet mode for scripts
+obliteratus ui --quiet --port 7860
+```
+
+</CodeGroup>
+
+## Alternative: python app.py
+
+You can also launch the UI by running `app.py` directly from the project root — this is exactly what HuggingFace Spaces does:
+
+```bash
+python app.py
+```
+
+```bash
+python app.py --share
+```
+
+The difference from `obliteratus ui` is that `python app.py` skips the Rich startup experience (GPU detection, system info, model recommendations). Use `obliteratus ui` for local development; `python app.py` is for Space deployment or when you want the raw Gradio launch with no extra output.
+
+## GPU detection and model recommendations
+
+When `obliteratus ui` starts (without `--quiet`), it runs full hardware detection and prints a system info panel:
+
+```
+╭─────────────── System Info ──────────────────╮
+│ Platform         Linux 6.1.0                 │
+│ Python           3.11.9                      │
+│ System RAM       128.0 GB                    │
+│ Disk Free (/tmp) 412.3 GB                    │
+│ PyTorch          2.4.0+cu121                 │
+│ Transformers     4.47.0                      │
+│ Gradio           5.29.0                      │
+│ GPU 0            NVIDIA A100 80GB  (80.0 GB, │
+│                  compute 8.0)                │
+│ HF Token         set                         │
+╰──────────────────────────────────────────────╯
+```
+
+Based on the detected GPU VRAM, it then shows a hardware-matched model recommendation table:
+
+| Tier | VRAM threshold | Example recommendations |
+|---|---|---|
+| **CPU** | No GPU | distilgpt2 (82M), TinyLlama 1.1B |
+| **Small** | 4–8 GB | TinyLlama 1.1B, Qwen2.5-0.5B, Qwen2.5-3B |
+| **MPS** | Apple Silicon | TinyLlama 1.1B, Qwen2.5-3B, Llama-3.2-3B |
+| **Medium** | 8–16 GB | Qwen2.5-7B, Llama-3.1-8B, Mistral-7B |
+| **Large** | 24+ GB | GPT-OSS-20B (MoE), Llama-3.1-70B (4bit), Qwen3-30B-A3B |
+| **Frontier** | 80+ GB | DeepSeek-V3 671B, Llama-3.1-70B (full), Qwen3.5-397B |
+
+<Tip>
+  Set the `HF_TOKEN` environment variable before launching if you need to access gated models (Llama, Gemma, etc.). The startup panel will show `HF Token: set` when it's detected.
+</Tip>
+
+## HF Token for gated models
+
+```bash
+export HF_TOKEN=hf_your_token_here
+obliteratus ui
+```
+
+Without a token, gated models (like `meta-llama/Llama-3.1-8B-Instruct`) will fail to download. The startup panel shows `HF Token: not set (gated models won't work)` as a reminder.

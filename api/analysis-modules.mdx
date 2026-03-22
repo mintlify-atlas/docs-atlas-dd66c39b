@@ -1,0 +1,564 @@
+---
+title: "Analysis Modules API"
+description: "Complete reference for all OBLITERATUS analysis module classes for mechanistic interpretability of refusal."
+---
+
+## Overview
+
+OBLITERATUS ships with a comprehensive suite of analysis modules for mechanistic interpretability of refusal behavior. All modules are importable from `obliteratus.analysis`.
+
+```python
+from obliteratus.analysis import (
+    CrossLayerAlignmentAnalyzer,
+    RefusalLogitLens,
+    WhitenedSVDExtractor,
+    ActivationProbe,
+    DefenseRobustnessEvaluator,
+    ConceptConeAnalyzer,
+    AlignmentImprintDetector,
+    MultiTokenPositionAnalyzer,
+    SparseDirectionSurgeon,
+    CausalRefusalTracer,
+    ResidualStreamDecomposer,
+    LinearRefusalProbe,
+    TransferAnalyzer,
+    SteeringVectorFactory,
+    SteeringHookManager,
+)
+```
+
+---
+
+## Modules
+
+<AccordionGroup>
+
+<Accordion title="CrossLayerAlignmentAnalyzer">
+
+**Module:** `obliteratus.analysis.cross_layer`
+
+Computes a pairwise cosine-similarity matrix across all layers' refusal directions to answer: is refusal one persistent direction propagated through the residual stream, or independent per-layer directions? Also identifies **refusal direction clusters** — groups of layers that share similar geometry, corresponding to distinct functional stages (comprehension → decision → generation).
+
+```python
+from obliteratus.analysis import CrossLayerAlignmentAnalyzer
+
+analyzer = CrossLayerAlignmentAnalyzer(cluster_threshold=0.85)
+result = analyzer.analyze(
+    refusal_directions=pipeline.refusal_directions,
+    strong_layers=pipeline._strong_layers,
+)
+
+print(f"Persistence: {result.direction_persistence_score:.3f}")
+print(f"Clusters: {result.cluster_count}")
+print(f"Mean adjacent cosine: {result.mean_adjacent_cosine:.3f}")
+print(f"Total geodesic drift: {result.total_geodesic_distance:.2f} rad")
+```
+
+#### Constructor
+
+<ParamField path="cluster_threshold" type="float" default="0.85">
+  Minimum cosine similarity for two layers to be assigned to the same refusal-direction cluster.
+</ParamField>
+
+#### `analyze(refusal_directions, strong_layers=None) -> CrossLayerResult`
+
+<ParamField path="refusal_directions" type="dict[int, torch.Tensor]" required>
+  Layer-index → `(hidden_dim,)` unit direction tensors.
+</ParamField>
+
+<ParamField path="strong_layers" type="list[int] | None" default="None">
+  Optional subset of layers to analyze. Uses all layers with directions if `None`.
+</ParamField>
+
+**Returns** `CrossLayerResult` with fields: `cosine_matrix`, `clusters`, `cluster_count`, `angular_drift`, `total_geodesic_distance`, `mean_adjacent_cosine`, `direction_persistence_score`.
+
+</Accordion>
+
+<Accordion title="RefusalLogitLens">
+
+**Module:** `obliteratus.analysis.logit_lens`
+
+Decodes refusal directions through the model's unembedding matrix to reveal which output tokens the direction promotes (e.g., "sorry", "cannot") or suppresses (compliance tokens). Computes a **refusal token spectrum** and **refusal specificity score** — how tightly the direction targets refusal language versus having broad effects.
+
+```python
+from obliteratus.analysis import RefusalLogitLens
+
+lens = RefusalLogitLens(top_k=25)
+result = lens.analyze_direction(
+    direction=pipeline.refusal_directions[layer_idx],
+    model=pipeline.handle.model,
+    tokenizer=pipeline.handle.tokenizer,
+    layer_idx=layer_idx,
+)
+
+print(f"Top promoted: {result.top_promoted[:5]}")
+print(f"Refusal specificity: {result.refusal_specificity:.3f}")
+print(f"Refusal-compliance gap: {result.refusal_compliance_gap:.4f}")
+```
+
+#### Constructor
+
+<ParamField path="top_k" type="int" default="25">
+  Number of top promoted and top suppressed tokens to report.
+</ParamField>
+
+#### `analyze_direction(direction, model, tokenizer, layer_idx=0) -> LogitLensResult`
+
+**Returns** `LogitLensResult` with: `top_promoted`, `top_suppressed`, `refusal_token_mean_boost`, `compliance_token_mean_boost`, `refusal_specificity`, `logit_effect_entropy`, `refusal_compliance_gap`.
+
+</Accordion>
+
+<Accordion title="WhitenedSVDExtractor">
+
+**Module:** `obliteratus.analysis.whitened_svd`
+
+Extracts refusal directions using covariance-whitened SVD. Standard SVD finds directions with high absolute variance; whitened SVD normalizes by the harmless activation covariance first, so extracted directions are unusual *relative to the baseline activation distribution* — producing cleaner, less noise-contaminated refusal directions.
+
+```python
+from obliteratus.analysis import WhitenedSVDExtractor
+
+extractor = WhitenedSVDExtractor(
+    regularization_eps=1e-4,
+    min_variance_ratio=0.01,
+)
+result = extractor.extract(
+    harmful_activations=pipeline._harmful_acts[layer_idx],
+    harmless_activations=pipeline._harmless_acts[layer_idx],
+    n_directions=4,
+    layer_idx=layer_idx,
+)
+
+print(f"Directions: {result.directions.shape}")  # (k, hidden_dim)
+print(f"Variance explained: {result.variance_explained:.1%}")
+print(f"Condition number: {result.condition_number:.2f}")
+```
+
+#### Constructor
+
+<ParamField path="regularization_eps" type="float" default="1e-4">
+  Tikhonov regularization added to the covariance diagonal for numerical stability.
+</ParamField>
+
+<ParamField path="min_variance_ratio" type="float" default="0.01">
+  Minimum eigenvalue ratio (relative to max). Dimensions below this threshold are truncated to prevent noise amplification.
+</ParamField>
+
+#### `extract(harmful_activations, harmless_activations, n_directions=4, layer_idx=0) -> WhitenedSVDResult`
+
+**Returns** `WhitenedSVDResult` with: `directions`, `whitened_directions`, `singular_values`, `variance_explained`, `condition_number`, `effective_rank`.
+
+</Accordion>
+
+<Accordion title="ActivationProbe">
+
+**Module:** `obliteratus.analysis.activation_probing`
+
+Probes post-excision activations to verify refusal removal. Introduces the **Refusal Elimination Score (RES)** — a scalar combining projection reduction, signal separation, and layer coverage into a single 0–1 quality metric.
+
+```python
+from obliteratus.analysis import ActivationProbe
+
+probe = ActivationProbe(residual_threshold=0.1)
+result = probe.probe_layer(
+    harmful_activations=pipeline._harmful_acts[layer_idx],
+    harmless_activations=pipeline._harmless_acts[layer_idx],
+    refusal_direction=pipeline.refusal_directions[layer_idx],
+    layer_idx=layer_idx,
+)
+
+print(f"Projection gap: {result.projection_gap:.4f}")  # should be ~0
+print(f"d-prime: {result.separation_d_prime:.3f}")
+```
+
+#### Constructor
+
+<ParamField path="residual_threshold" type="float" default="0.1">
+  Projection magnitude below which the refusal signal is considered eliminated for a layer.
+</ParamField>
+
+#### `probe_layer(harmful_activations, harmless_activations, refusal_direction, layer_idx=0) -> LayerProbeResult`
+
+**Returns** `LayerProbeResult` with: `harmful_mean_projection`, `harmless_mean_projection`, `projection_gap`, `separation_d_prime`.
+
+#### `probe_all_layers(pipeline) -> ProbeResult`
+
+Probes all layers at once and computes `refusal_elimination_score`, `mean_projection_gap`, `max_residual_projection`, `layers_with_residual`.
+
+</Accordion>
+
+<Accordion title="DefenseRobustnessEvaluator">
+
+**Module:** `obliteratus.analysis.defense_robustness`
+
+Systematically profiles a model's alignment defense: characterizes self-repair capacity (the **Ouroboros Effect**), measures safety-capability entanglement per layer, and estimates alignment training method. Used by `InformedAbliterationPipeline` to skip entangled layers and configure refinement passes.
+
+```python
+from obliteratus.analysis import DefenseRobustnessEvaluator
+
+# pipeline must have refusal_directions populated (post-distill)
+evaluator = DefenseRobustnessEvaluator(pipeline)
+profile = evaluator.profile_defense()
+emap = evaluator.map_entanglement()
+
+print(f"Robustness: {profile.estimated_robustness}")
+print(f"Self-repair: {profile.self_repair_estimate:.2f}")
+print(f"Entanglement: {profile.entanglement_score:.3f}")
+print(f"Most entangled layers: {emap.most_entangled_layers}")
+```
+
+#### Constructor
+
+<ParamField path="pipeline" type="AbliterationPipeline" required>
+  A pipeline instance that has completed at least the PROBE and DISTILL stages (i.e., `refusal_directions` is populated).
+</ParamField>
+
+#### `profile_defense() -> DefenseProfile`
+
+**Returns** `DefenseProfile` with: `alignment_type_estimate`, `refusal_concentration`, `refusal_layer_spread`, `mean_refusal_strength`, `self_repair_estimate`, `entanglement_score`, `estimated_robustness`.
+
+#### `map_entanglement() -> EntanglementMap`
+
+**Returns** `EntanglementMap` with: `layer_entanglement`, `most_entangled_layers`, `least_entangled_layers`, `overall_entanglement`, `capability_sensitivity`.
+
+</Accordion>
+
+<Accordion title="ConceptConeAnalyzer">
+
+**Module:** `obliteratus.analysis.concept_geometry`
+
+Analyzes whether refusal forms a linear subspace or a polyhedral concept cone (Wollschlager et al. 2025). Extracts per-harm-category directions and computes the **Direction Specificity Index (DSI)** for each.
+
+```python
+from obliteratus.analysis import ConceptConeAnalyzer
+
+analyzer = ConceptConeAnalyzer()
+result = analyzer.analyze_layer(
+    harmful_activations=pipeline._harmful_acts[layer_idx],
+    harmless_activations=pipeline._harmless_acts[layer_idx],
+    layer_idx=layer_idx,
+)
+
+print(f"Cone type: {'POLYHEDRAL' if result.is_polyhedral else 'LINEAR'}")
+print(f"Dimensionality: {result.cone_dimensionality:.2f}")
+for cd in result.category_directions:
+    print(f"  {cd.category:15s}  DSI={cd.specificity:.3f}  str={cd.strength:.3f}")
+```
+
+#### `analyze_layer(harmful_activations, harmless_activations, layer_idx=0) -> ConeConeResult`
+
+**Returns** `ConeConeResult` with: `is_polyhedral`, `cone_dimensionality`, `mean_pairwise_cosine`, `category_directions` (list of `CategoryDirection`), `category_count`.
+
+</Accordion>
+
+<Accordion title="AlignmentImprintDetector">
+
+**Module:** `obliteratus.analysis.alignment_imprint`
+
+Detects alignment training method from refusal geometry. Computes six geometric features (Gini coefficient, effective rank, cross-layer smoothness, tail-layer bias, mean pairwise orthogonality, spectral decay rate) and maps them to a probability distribution over DPO, RLHF, CAI, and SFT.
+
+```python
+from obliteratus.analysis import AlignmentImprintDetector
+
+detector = AlignmentImprintDetector()
+imprint = detector.detect_imprint(
+    refusal_directions=pipeline.refusal_directions,
+)
+
+print(f"Method: {imprint.predicted_method.upper()} ({imprint.confidence:.0%})")
+print(f"DPO={imprint.dpo_probability:.0%} RLHF={imprint.rlhf_probability:.0%} "
+      f"CAI={imprint.cai_probability:.0%} SFT={imprint.sft_probability:.0%}")
+```
+
+#### `detect_imprint(refusal_directions, refusal_strengths=None) -> AlignmentImprint`
+
+<ParamField path="refusal_directions" type="dict[int, torch.Tensor]" required>
+  Per-layer refusal directions.
+</ParamField>
+
+<ParamField path="refusal_strengths" type="dict[int, float] | None" default="None">
+  Per-layer strength scalars. If `None`, inferred from direction norms.
+</ParamField>
+
+**Returns** `AlignmentImprint` with: `predicted_method`, `confidence`, `dpo_probability`, `rlhf_probability`, `cai_probability`, `sft_probability`, plus geometric features.
+
+</Accordion>
+
+<Accordion title="MultiTokenPositionAnalyzer">
+
+**Module:** `obliteratus.analysis.multi_token_position`
+
+Profiles the refusal signal at every token position in a prompt, going beyond the standard last-token assumption. Detects **trigger tokens** — specific positions that most strongly activate refusal circuits — and measures positional decay rate.
+
+```python
+from obliteratus.analysis import MultiTokenPositionAnalyzer
+
+analyzer = MultiTokenPositionAnalyzer(
+    trigger_threshold=0.5,
+    min_strength=0.01,
+)
+result = analyzer.analyze_prompt(
+    activations=acts,        # (seq_len, hidden_dim)
+    refusal_direction=direction,
+    token_texts=tokens,
+    layer_idx=layer_idx,
+    prompt_text=prompt,
+)
+
+print(f"Peak position: {result.peak_position} (token: {result.token_profiles[result.peak_position].token_text!r})")
+print(f"Last-token strength: {result.last_token_strength:.4f}")
+print(f"Trigger positions: {result.trigger_positions}")
+```
+
+#### Constructor
+
+<ParamField path="trigger_threshold" type="float" default="0.5">
+  Fraction of peak strength above which a position is classified as a trigger token.
+</ParamField>
+
+<ParamField path="min_strength" type="float" default="0.01">
+  Minimum absolute projection to consider non-noise.
+</ParamField>
+
+#### `analyze_prompt(activations, refusal_direction, token_texts=None, layer_idx=0, prompt_text="") -> PositionAnalysisResult`
+
+**Returns** `PositionAnalysisResult` with: `token_profiles`, `peak_position`, `peak_strength`, `last_token_strength`, `trigger_positions`, `decay_rate`, `position_gini`.
+
+</Accordion>
+
+<Accordion title="SparseDirectionSurgeon">
+
+**Module:** `obliteratus.analysis.sparse_surgery`
+
+Identifies and modifies only the weight matrix rows with the highest projection onto the refusal direction, leaving low-projection rows untouched. Introduces the **Refusal Sparsity Index (RSI)** quantifying how concentrated vs. distributed the refusal signal is across rows.
+
+```python
+from obliteratus.analysis import SparseDirectionSurgeon
+
+surgeon = SparseDirectionSurgeon(
+    sparsity=0.1,       # modify only top-10% of rows
+    auto_sparsity=True, # override sparsity from RSI
+)
+plan = surgeon.plan_surgery(
+    weights=weight_dict,      # {layer_idx: weight_tensor}
+    directions=direction_dict, # {layer_idx: direction_tensor}
+)
+
+print(f"Mean RSI: {plan.mean_refusal_sparsity_index:.3f}")
+print(f"Recommended sparsity: {plan.recommended_sparsity:.1%}")
+print(f"Most sparse layer: {plan.most_sparse_layer}")
+
+# Apply to a single weight matrix
+W_new = surgeon.apply_sparse_projection(W, direction)
+```
+
+#### Constructor
+
+<ParamField path="sparsity" type="float" default="0.1">
+  Fraction of rows to modify (top by projection magnitude).
+</ParamField>
+
+<ParamField path="auto_sparsity" type="bool" default="False">
+  If `True`, override `sparsity` using the RSI-derived optimal value from `plan_surgery`.
+</ParamField>
+
+#### `plan_surgery(weights, directions) -> SparseSurgeryPlan`
+
+Analyzes row-projection distributions and computes per-layer `SparseProjectionResult` records plus global recommendations.
+
+#### `apply_sparse_projection(W, direction) -> torch.Tensor`
+
+Applies sparse projection to a single weight matrix. Returns modified matrix.
+
+</Accordion>
+
+<Accordion title="CausalRefusalTracer">
+
+**Module:** `obliteratus.analysis.causal_tracing`
+
+Estimates causal importance of components using noise-based sensitivity analysis from pre-collected activations (no additional forward passes required). Identifies which layers and component types (attention, MLP) most *cause* refusal, not merely correlate with it.
+
+<Warning>This is a simulation-based approximation, not true causal tracing. For real activation patching, use TransformerLens or nnsight. Results should be validated with real interventions when model access is available.</Warning>
+
+```python
+from obliteratus.analysis import CausalRefusalTracer
+
+tracer = CausalRefusalTracer(
+    noise_level=3.0,
+    causal_threshold=0.1,
+)
+result = tracer.trace_from_activations(
+    clean_activations=pipeline._harmful_acts,
+    refusal_direction=pipeline.refusal_directions,
+    component_types=["attention", "mlp", "full_layer"],
+)
+
+print(f"Circuit size: {result.circuit_size} components")
+print(f"Circuit fraction: {result.circuit_fraction:.1%}")
+for layer, ctype in result.causal_components[:5]:
+    print(f"  Layer {layer} {ctype}")
+```
+
+#### Constructor
+
+<ParamField path="noise_level" type="float" default="3.0">
+  Standard deviation of Gaussian noise for corruption simulation.
+</ParamField>
+
+<ParamField path="causal_threshold" type="float" default="0.1">
+  Minimum estimated causal effect to classify a component as causally important.
+</ParamField>
+
+#### `trace_from_activations(clean_activations, refusal_direction, component_types=None) -> CausalTracingResult`
+
+**Returns** `CausalTracingResult` with: `component_effects`, `causal_components`, `circuit_size`, `circuit_fraction`, `correlation_causal_agreement`.
+
+</Accordion>
+
+<Accordion title="ResidualStreamDecomposer">
+
+**Module:** `obliteratus.analysis.residual_stream`
+
+Decomposes the residual stream into attention, MLP, and per-head contributions to attribute refusal signal to specific model components. Identifies **refusal heads** — individual attention heads that primarily implement refusal behavior.
+
+```python
+from obliteratus.analysis import ResidualStreamDecomposer
+
+decomposer = ResidualStreamDecomposer(
+    refusal_head_threshold=0.1,
+    n_heads_per_layer=32,
+)
+result = decomposer.decompose(
+    layer_activations=pipeline._harmful_acts,
+    refusal_directions=pipeline.refusal_directions,
+)
+
+print(f"Attention fraction: {result.attention_fraction:.1%}")
+print(f"Refusal heads: {result.n_refusal_heads}")
+print(f"Peak layer: {result.peak_layer}")
+for layer, head, proj in result.refusal_heads[:5]:
+    print(f"  L{layer}H{head}: {proj:.4f}")
+```
+
+#### Constructor
+
+<ParamField path="refusal_head_threshold" type="float" default="0.1">
+  Minimum `|projection| / max_projection` to classify a head as a refusal head.
+</ParamField>
+
+<ParamField path="n_heads_per_layer" type="int | None" default="None">
+  Number of attention heads. Inferred from activation shapes if `None`.
+</ParamField>
+
+#### `decompose(layer_activations, refusal_directions, attn_outputs=None, mlp_outputs=None, head_outputs=None) -> ResidualStreamResult`
+
+**Returns** `ResidualStreamResult` with: `per_layer`, `total_attention_contribution`, `total_mlp_contribution`, `attention_fraction`, `refusal_heads`, `n_refusal_heads`, `onset_layer`, `peak_layer`.
+
+</Accordion>
+
+<Accordion title="LinearRefusalProbe">
+
+**Module:** `obliteratus.analysis.probing_classifiers`
+
+Trains logistic regression probing classifiers at each layer to measure refusal *decodability*. Unlike `ActivationProbe` (which tests a pre-specified direction), `LinearRefusalProbe` learns the optimal direction from data — potentially finding residual refusal information that projection-based methods missed.
+
+```python
+from obliteratus.analysis import LinearRefusalProbe
+
+probe = LinearRefusalProbe(
+    n_epochs=100,
+    learning_rate=0.01,
+    weight_decay=0.001,
+    test_fraction=0.2,
+)
+result = probe.probe_layer(
+    harmful_activations=pipeline._harmful_acts[layer_idx],
+    harmless_activations=pipeline._harmless_acts[layer_idx],
+    analytical_direction=pipeline.refusal_directions.get(layer_idx),
+    layer_idx=layer_idx,
+)
+
+print(f"Accuracy: {result.accuracy:.1%}")
+print(f"AUROC: {result.auroc:.3f}")
+print(f"Direction agreement: {result.cosine_with_analytical:.3f}")
+print(f"Mutual information: {result.mutual_information:.3f} bits")
+```
+
+#### Constructor
+
+<ParamField path="n_epochs" type="int" default="100">
+  Training epochs for each probe.
+</ParamField>
+
+<ParamField path="learning_rate" type="float" default="0.01">
+  SGD learning rate.
+</ParamField>
+
+<ParamField path="weight_decay" type="float" default="0.001">
+  L2 regularization.
+</ParamField>
+
+<ParamField path="test_fraction" type="float" default="0.2">
+  Fraction of data held out for evaluation.
+</ParamField>
+
+#### `probe_layer(harmful_activations, harmless_activations, analytical_direction=None, layer_idx=0) -> ProbeResult`
+
+**Returns** `ProbeResult` with: `accuracy`, `cross_entropy`, `auroc`, `learned_direction`, `cosine_with_analytical`, `mutual_information`, `baseline_entropy`.
+
+</Accordion>
+
+<Accordion title="TransferAnalyzer">
+
+**Module:** `obliteratus.analysis.cross_model_transfer`
+
+Tests whether refusal directions transfer across models, harm categories, and layers. Computes a **Universality Index** (0 = model-specific, 1 = fully universal) and a cross-category transfer matrix revealing which harm types share refusal mechanisms.
+
+```python
+from obliteratus.analysis import TransferAnalyzer
+
+analyzer = TransferAnalyzer(
+    transfer_threshold=0.5,
+    cluster_threshold=0.7,
+)
+
+# Compare directions from two different models
+result = analyzer.analyze_cross_model(
+    directions_a=pipeline_a.refusal_directions,
+    directions_b=pipeline_b.refusal_directions,
+    model_a_name="llama-3.1-8b",
+    model_b_name="mistral-7b",
+)
+
+print(f"Mean transfer score: {result.mean_transfer_score:.3f}")
+print(f"Transfer above threshold: {result.transfer_above_threshold:.1%} of layers")
+```
+
+#### Constructor
+
+<ParamField path="transfer_threshold" type="float" default="0.5">
+  Minimum cosine similarity to count as successful transfer.
+</ParamField>
+
+<ParamField path="cluster_threshold" type="float" default="0.7">
+  Minimum cosine for same-cluster classification in category analysis.
+</ParamField>
+
+#### `analyze_cross_model(directions_a, directions_b, model_a_name="model_a", model_b_name="model_b") -> CrossModelResult`
+
+**Returns** `CrossModelResult` with: `per_layer_transfer`, `mean_transfer_score`, `best_transfer_layer`, `worst_transfer_layer`, `transfer_above_threshold`.
+
+</Accordion>
+
+<Accordion title="SteeringVectorFactory" >
+
+See the [Steering Vectors API](/api/steering-vectors) page for the full reference.
+
+</Accordion>
+
+<Accordion title="SteeringHookManager">
+
+See the [Steering Vectors API](/api/steering-vectors) page for the full reference.
+
+</Accordion>
+
+</AccordionGroup>

@@ -1,0 +1,95 @@
+---
+title: "Community Research"
+description: "Every obliteration run contributes to the largest crowd-sourced abliteration study ever conducted."
+---
+
+## The research mission
+
+The biggest open question in abliteration research is *universality*: do refusal mechanisms work the same way across architectures, training methods, and model scales?
+
+Answering that requires thousands of runs across hundreds of models on diverse hardware — data no single lab could generate alone. OBLITERATUS is built to collect exactly that data, one obliteration at a time.
+
+<Note>
+When you run OBLITERATUS with telemetry enabled, your run contributes anonymous benchmark data — refusal rate, perplexity, coherence, KL divergence, hardware info — to a growing community dataset. You're not just using a tool; you're co-authoring the science.
+</Note>
+
+## Why this data is unprecedented
+
+No existing abliteration dataset combines:
+
+- **Scale**: thousands of runs contributed by independent researchers
+- **Hardware diversity**: A100, H100, RTX 4090, T4, CPU — each producing different performance profiles
+- **Model breadth**: 116 curated models across five compute tiers, from TinyLlama 1.1B to Qwen3-235B
+- **Method comparison**: seven obliteration methods (basic, advanced, aggressive, surgical, optimized, inverted, nuclear) benchmarked against each other on the same models
+- **Full metric coverage**: refusal rate, perplexity, coherence, and KL divergence on every run
+
+The result is a cross-hardware, cross-model, cross-method abliteration dataset that advances the community's understanding of how alignment mechanisms are geometrically structured inside transformer architectures.
+
+## Three contribution methods
+
+<CardGroup cols={3}>
+  <Card title="Telemetry" icon="signal" href="/community/telemetry">
+    Opt-in anonymous telemetry. Add `--contribute` to any CLI run, or set `OBLITERATUS_TELEMETRY=1`. On HuggingFace Spaces, telemetry is on by default.
+  </Card>
+  <Card title="PR-based contributions" icon="code-pull-request" href="/community/contributing">
+    Save structured JSON results locally and submit them via pull request. Full control — nothing leaves your machine until you open the PR.
+  </Card>
+  <Card title="HuggingFace Spaces" icon="rocket" href="/community/leaderboard">
+    Every click on the public Space auto-contributes. Zero effort, immediate impact.
+  </Card>
+</CardGroup>
+
+## What the community is building
+
+Every run that contributes to the community dataset adds a data point to a structure that no single researcher could build:
+
+- **Cross-architecture refusal geometry maps** — how direction vectors differ between LLaMA, Qwen, Mistral, Gemma, and Phi families
+- **Hardware performance profiles** — wall-clock time and VRAM usage across GPU generations
+- **Method effectiveness rankings** — which abliteration method achieves lowest refusal rate at highest coherence, per model family
+- **Cross-model transfer analysis** — measuring whether a direction extracted from one model generalizes to another (the Universality Index)
+
+This dataset directly feeds the research papers and analysis reports that advance the field of mechanistic interpretability.
+
+## The community leaderboard
+
+All community contributions aggregate into the **Leaderboard** — a live, ranked view of which methods work best on which models.
+
+```bash
+# View the leaderboard in your terminal
+obliteratus aggregate --format summary
+
+# Generate paper-ready LaTeX tables from community data
+obliteratus aggregate --format latex --metric refusal_rate --min-runs 3
+```
+
+The Leaderboard tab on the HuggingFace Space shows the same data in a visual interface, merging your local runs with community-wide contributions from the central Hub dataset.
+
+See [Community Leaderboard](/community/leaderboard) for full details on how to read and use the rankings.
+
+## The broader goal: open science
+
+Most abliteration work happens in isolation — a researcher runs a pipeline, gets results, and they stay local. OBLITERATUS is designed to change that by making every run part of a shared experiment.
+
+The research questions this community dataset is designed to answer:
+
+- Are refusal directions universal across model families, or does each architecture have its own geometry?
+- Does the number of distinct refusal mechanisms (linear vs. polyhedral cone) vary systematically with model size or training method?
+- Which hardware configurations produce the most consistent benchmarks?
+- Does the Ouroboros effect (self-repair after guardrail removal) correlate with detected alignment method (DPO vs. RLHF vs. CAI vs. SFT)?
+
+Every obliteration run moves these questions closer to answers. **This is open science at scale.**
+
+<CardGroup cols={2}>
+  <Card title="Telemetry" icon="signal" href="/community/telemetry">
+    Enable opt-in telemetry and understand exactly what is and isn't collected.
+  </Card>
+  <Card title="Community leaderboard" icon="chart-bar" href="/community/leaderboard">
+    Browse community results and use the recommend command to choose the best method for your model.
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="/community/contributing">
+    Contribute code, research data, model presets, and documentation.
+  </Card>
+  <Card title="Quickstart" icon="play" href="/quickstart">
+    Obliterate your first model and contribute your first data point.
+  </Card>
+</CardGroup>

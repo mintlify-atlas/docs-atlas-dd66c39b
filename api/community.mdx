@@ -1,0 +1,267 @@
+---
+title: "Community API"
+description: "Functions for saving, loading, and aggregating community research contributions from abliteration runs."
+---
+
+## Overview
+
+The community module lets you share anonymized abliteration results as structured JSON files that can be submitted to the OBLITERATUS community results repository. Unlike telemetry (which is automatic and remote), contributions are always explicit and local-only until you choose to share them.
+
+```python
+from obliteratus.community import save_contribution, load_contributions, aggregate_results
+```
+
+**Key differences from telemetry:**
+- Includes the public model name (for aggregation by model)
+- Saved locally — nothing is sent remotely
+- Filename is human-readable (`llama2-7b_advanced_20260227_143052.json`)
+- Includes a config fingerprint for deduplication
+- Always explicit opt-in — never automatic
+
+---
+
+## `save_contribution()`
+
+```python
+def save_contribution(
+    pipeline,
+    *,
+    model_name: str,
+    notes: str = "",
+    output_dir: str | Path = "community_results",
+    informed_report=None,
+) -> Path
+```
+
+Save a contribution record from a completed pipeline run. The record wraps the full OBLITERATUS telemetry schema in a community envelope.
+
+<ParamField path="pipeline" type="AbliterationPipeline" required>
+  A completed `AbliterationPipeline` (or `InformedAbliterationPipeline`) instance after `run()` or `run_informed()` has returned.
+</ParamField>
+
+<ParamField path="model_name" type="str" required>
+  The public HuggingFace model ID used in the run (e.g., `"meta-llama/Llama-2-7b-chat-hf"`). Used as the aggregation key — must be the public ID, not a local path.
+</ParamField>
+
+<ParamField path="notes" type="str" default="">
+  Free-text notes about the run: hardware, dataset, observations, etc.
+</ParamField>
+
+<ParamField path="output_dir" type="str | Path" default="community_results">
+  Directory to write the contribution JSON file. Created automatically if it does not exist.
+</ParamField>
+
+<ParamField path="informed_report" type="InformedPipelineReport | None" default="None">
+  Pass the report from `run_informed()` to include analysis insights (alignment detection, cone geometry, Ouroboros passes) in the contribution.
+</ParamField>
+
+**Returns** `Path` — absolute path to the saved JSON file.
+
+**Filename format:** `{model_short_name}_{method}_{YYYYMMDD_HHMMSS}.json`
+
+---
+
+## `load_contributions()`
+
+```python
+def load_contributions(
+    contrib_dir: str | Path = "community_results",
+) -> list[dict[str, Any]]
+```
+
+Load all contribution records from a directory.
+
+<ParamField path="contrib_dir" type="str | Path" default="community_results">
+  Directory containing contribution JSON files. Non-existent directory returns an empty list.
+</ParamField>
+
+**Returns** `list[dict]` — parsed contribution records sorted by timestamp. Each record is a dict with the structure described in [Contribution Schema](#contribution-schema) below. Invalid files are skipped with a warning.
+
+---
+
+## `aggregate_results()`
+
+```python
+def aggregate_results(
+    records: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]
+```
+
+Aggregate contribution records into per-model, per-method summary statistics.
+
+<ParamField path="records" type="list[dict]" required>
+  List of contribution records, e.g., from `load_contributions()`.
+</ParamField>
+
+**Returns** nested dict:
+
+```python
+{
+    "meta-llama/Llama-3.1-8B-Instruct": {
+        "advanced": {
+            "n_runs": 5,
+            "refusal_rate": {"mean": 0.02, "std": 0.01, "n": 5, "min": 0.0, "max": 0.03},
+            "perplexity":   {"mean": 8.3,  "std": 0.4,  "n": 5, "min": 7.9, "max": 8.9},
+            "coherence":    {"mean": 0.91, "std": 0.02, "n": 5, "min": 0.88, "max": 0.94},
+        },
+        ...
+    },
+    ...
+}
+```
+
+Metrics included: `refusal_rate`, `perplexity`, `coherence`.
+
+---
+
+## Contribution Schema
+
+Each contribution JSON file follows this schema:
+
+```json
+{
+  "contribution_schema_version": 1,
+  "timestamp": "2026-02-27T14:30:52Z",
+  "model_name": "meta-llama/Llama-2-7b-chat-hf",
+  "config_fingerprint": "a3f2c1d8",
+  "notes": "Ran on A100 with default prompts",
+  "telemetry": {
+    "method": "advanced",
+    "method_config": {
+      "n_directions": 4,
+      "norm_preserve": true,
+      "regularization": 0.3,
+      "refinement_passes": 2,
+      "project_biases": true,
+      "use_chat_template": true,
+      "use_whitened_svd": false,
+      "true_iterative_refinement": false,
+      "use_jailbreak_contrast": false,
+      "layer_adaptive_strength": true,
+      "attention_head_surgery": false,
+      "safety_neuron_masking": false,
+      "per_expert_directions": false,
+      "use_sae_features": false,
+      "invert_refusal": false
+    },
+    "architecture": "llama",
+    "num_layers": 32,
+    "hidden_size": 4096,
+    "total_params": 7000000000,
+    "quality_metrics": {
+      "refusal_rate": 0.03,
+      "perplexity": 8.4,
+      "coherence": 0.91,
+      "kl_divergence": 0.12
+    },
+    "stage_durations": {
+      "summon": 45.2,
+      "probe": 120.8,
+      "distill": 3.1,
+      "excise": 8.4,
+      "verify": 67.9,
+      "rebirth": 112.3
+    },
+    "strong_layers": [14, 15, 16, 17, 18, 19],
+    "gpu_memory_gb": 16.3
+  }
+}
+```
+
+<ResponseField name="contribution_schema_version" type="int">
+  Schema version. Currently `1`.
+</ResponseField>
+
+<ResponseField name="timestamp" type="str">
+  ISO 8601 UTC timestamp of the run.
+</ResponseField>
+
+<ResponseField name="model_name" type="str">
+  Public HuggingFace model ID.
+</ResponseField>
+
+<ResponseField name="config_fingerprint" type="str">
+  8-character SHA-256 hash of the method config for deduplication.
+</ResponseField>
+
+<ResponseField name="notes" type="str">
+  Free-text notes from the contributor.
+</ResponseField>
+
+<ResponseField name="telemetry" type="dict">
+  Full pipeline telemetry including method config, architecture info, quality metrics, stage durations, and strong layers.
+</ResponseField>
+
+---
+
+## Code Examples
+
+<CodeGroup>
+```python Save After Basic Run
+from obliteratus.abliterate import AbliterationPipeline
+from obliteratus.community import save_contribution
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_llama",
+    method="advanced",
+)
+pipeline.run()
+
+path = save_contribution(
+    pipeline,
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    notes="Tested on A100 80GB, default 512 prompt pairs",
+    output_dir="community_results",
+)
+print(f"Saved contribution to: {path}")
+```
+
+```python Save After Informed Run
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+from obliteratus.community import save_contribution
+
+pipeline = InformedAbliterationPipeline(
+    model_name="Qwen/Qwen2.5-7B-Instruct",
+)
+output_path, report = pipeline.run_informed()
+
+path = save_contribution(
+    pipeline,
+    model_name="Qwen/Qwen2.5-7B-Instruct",
+    notes="Analysis-informed run, polyhedral cone detected",
+    informed_report=report,  # includes analysis insights
+)
+```
+
+```python Load, Aggregate, and Print
+from obliteratus.community import load_contributions, aggregate_results
+
+records = load_contributions("community_results")
+print(f"Loaded {len(records)} contributions")
+
+aggregated = aggregate_results(records)
+
+for model_name, methods in sorted(aggregated.items()):
+    print(f"\n{model_name}")
+    for method, stats in sorted(methods.items()):
+        rr = stats.get("refusal_rate", {})
+        ppl = stats.get("perplexity", {})
+        print(
+            f"  {method:15s}  n={stats['n_runs']:2d}  "
+            f"refusal={rr.get('mean', '?'):.0%}±{rr.get('std', 0):.0%}  "
+            f"ppl={ppl.get('mean', '?'):.1f}"
+        )
+```
+
+```python CLI Equivalent
+# Save contribution via CLI flag:
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct \
+    --method advanced \
+    --contribute \
+    --contribute-notes "RTX 4090, default prompts"
+
+# View aggregated community results:
+obliteratus aggregate --dir community_results
+```
+</CodeGroup>

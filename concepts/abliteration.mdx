@@ -1,0 +1,190 @@
+---
+title: "What is Abliteration"
+description: "Understand how abliteration works — from activation collection through SVD direction extraction to weight projection."
+---
+
+Abliteration is the process of identifying and surgically removing the internal representation responsible for content refusal from a language model's weights — without retraining, fine-tuning, or modifying any training data. The result is a model that retains its full language capabilities while losing the compulsion to refuse certain requests.
+
+The technique builds on a key finding from Arditi et al. (2024): refusal in instruction-tuned LLMs is not distributed uniformly across the model. It is mediated by a specific linear direction in activation space. Remove that direction from the right weight matrices, and the refusal behavior goes with it.
+
+---
+
+## The conceptual basis
+
+When a safety-aligned model processes a prompt it has been trained to refuse, something geometrically distinctive happens inside the transformer's residual stream. The hidden states at certain layers shift in a predictable direction — a direction that was carved out during alignment training (RLHF, DPO, CAI, or SFT) to encode the "I should not comply" signal.
+
+<Info>
+Arditi et al. (2024) showed this direction is approximately linear and consistent across many prompts and harm categories. Projecting it out of the model's weight matrices removes the refusal behavior while preserving general language capabilities.
+</Info>
+
+Because this direction exists in the *weights* of the model (not just in runtime activations), removing it is a one-time surgical operation. The modified weights survive save and reload. The model is permanently changed — until you retrain it.
+
+---
+
+## What "refusal direction" means mathematically
+
+For a transformer layer $l$ with hidden dimension $d$, the model collects activations:
+
+- $\mathbf{H} \in \mathbb{R}^{n \times d}$ — last-token hidden states from $n$ harmful prompts
+- $\mathbf{B} \in \mathbb{R}^{n \times d}$ — last-token hidden states from $n$ matched harmless prompts
+
+The **refusal direction** $\mathbf{r}_l$ is the unit vector that maximally separates these two distributions. The simplest extraction is the difference-in-means:
+
+$$\mathbf{r}_l = \frac{\bar{\mathbf{h}}_l - \bar{\mathbf{b}}_l}{\|\bar{\mathbf{h}}_l - \bar{\mathbf{b}}_l\|}$$
+
+For multi-direction extraction, SVD is applied to the difference matrix $\mathbf{D} = \mathbf{H} - \mathbf{B}$, yielding a **refusal subspace** — the top-$k$ right singular vectors that span the principal axes of harmful-vs-harmless variance.
+
+Once you have $\mathbf{r}_l$, the projection that removes it from a weight matrix $\mathbf{W}$ is:
+
+$$\mathbf{W}' = \mathbf{W} - (1 - \lambda)\, \mathbf{W}\mathbf{r}_l\mathbf{r}_l^\top$$
+
+where $\lambda \in [0, 1]$ is a regularization parameter (0 = full removal, 1 = no change).
+
+---
+
+## The six pipeline stages
+
+OBLITERATUS implements abliteration as a six-stage pipeline. Every stage is observable — you can inspect artifacts, hook into progress callbacks, and examine intermediate tensors.
+
+<CardGroup cols={2}>
+  <Card title="SUMMON" icon="bolt">
+    Load the model and tokenizer from HuggingFace Hub or local disk. Detect architecture, hidden size, layer count, and whether the model is MoE. Initialize all pipeline state.
+  </Card>
+  <Card title="PROBE" icon="microscope">
+    Run harmful and harmless prompt pairs through the model with forward hooks installed on every transformer layer. Collect last-token hidden states. For MoE models, also profile router logits per prompt. Optionally run jailbreak-contrastive prompts for three-way comparison.
+  </Card>
+  <Card title="DISTILL" icon="flask">
+    Extract the refusal subspace from the collected activations. Choose from diff-in-means (1 direction), SVD (up to 8 directions), whitened SVD (covariance-normalized), LEACE (optimal linear erasure), or Wasserstein-optimal. Apply layer selection to identify which layers carry strong refusal signal. Optionally apply jailbreak-contrastive blending and RDO gradient refinement.
+  </Card>
+  <Card title="EXCISE" icon="scissors">
+    Modify the model's weight matrices in-place by projecting out the refusal directions. Supports norm-preserving rescaling, bias term projection, layer-adaptive strength, attention head surgery, SAE feature-level ablation, per-expert directions for MoE, and LoRA-based reversible adapters.
+  </Card>
+  <Card title="VERIFY" icon="check-circle">
+    Measure the quality of the intervention. Compute perplexity, coherence, refusal rate on a test set, first-token KL divergence against the pre-excision baseline, and CKA similarity to the original model. Detect the Ouroboros effect — if refusal rate remains high, trigger additional targeted passes.
+  </Card>
+  <Card title="REBIRTH" icon="sparkles">
+    Save the modified model to disk in full HuggingFace format with complete metadata. Optionally push directly to HuggingFace Hub. The saved model is a drop-in replacement for the original.
+  </Card>
+</CardGroup>
+
+### Stage summary table
+
+| Stage | Input | Key operation | Output |
+|-------|-------|---------------|--------|
+| **SUMMON** | Model name or path | Load weights, tokenizer, architecture detection | `ModelHandle` with config |
+| **PROBE** | Prompt pairs (harmful / harmless) | Forward pass + hooks at each layer | Per-layer activation tensors |
+| **DISTILL** | Activation tensors | SVD / diff-in-means / whitened SVD | Refusal directions `{layer_idx: tensor}`, selected strong layers |
+| **EXCISE** | Refusal directions, model weights | Orthogonal projection + optional norm rescaling | Modified weight matrices (in-place) |
+| **VERIFY** | Modified model + test prompts | Inference + metric computation | Quality metrics dict |
+| **REBIRTH** | Modified model | `save_pretrained` + metadata | Saved model directory or Hub repo |
+
+---
+
+## Why it preserves capabilities
+
+The refusal direction is a small-measure subspace of the full hidden dimension. For a model with $d = 4096$, you are removing at most 8 directions from a 4096-dimensional space — less than 0.2% of the representational capacity.
+
+The key to doing this without degrading the rest of the model is **norm-preserving biprojection** (grimjim, 2025). After projecting the refusal direction out of a weight matrix, the Frobenius norm of the matrix decreases. Without rescaling, this creates cascading magnitude drift through downstream LayerNorm layers. The fix is simple:
+
+$$\mathbf{W}'' = \mathbf{W}' \cdot \frac{\|\mathbf{W}\|_F}{\|\mathbf{W}'\|_F}$$
+
+This preserves the matrix's overall scale while the directional component is removed. In practice, this keeps perplexity and coherence nearly identical to the original model on normal prompts.
+
+<Note>
+OBLITERATUS caps norm amplification at 1.10 (10% increase per projection step) to prevent pathological rescaling when removing directions from near-degenerate weight matrices.
+</Note>
+
+### Difference from fine-tuning
+
+| Property | Abliteration | Fine-tuning |
+|----------|-------------|-------------|
+| Modifies weights | Yes (surgical projection) | Yes (gradient descent) |
+| Requires training data | No | Yes |
+| Requires GPU training run | No | Yes |
+| Reversible | Only with LoRA mode | No |
+| Preserves other behavior | Yes (norm-preserving) | Not guaranteed |
+| Time to apply | Minutes | Hours to days |
+| Acts on | Specific refusal directions | All directions jointly |
+
+Fine-tuning is a blunt instrument — gradient descent adjusts every weight in the model simultaneously, with no guarantee that non-refusal capabilities are preserved. Abliteration is surgical: it targets only the geometric subspace that encodes refusal, leaving the rest of the model's weight geometry intact.
+
+---
+
+## The Ouroboros effect
+
+After abliteration removes the refusal direction from a set of layers, the model sometimes partially rebuilds the behavior. This is the **Ouroboros effect** — the chains try to reassemble themselves.
+
+The mechanism is straightforward: if refusal is encoded redundantly across multiple layers, removing it from a subset of layers leaves residual signal in the remaining ones. The transformer's residual stream can then partially reconstruct the refusal behavior during inference, even though the primary direction was removed.
+
+<Warning>
+The Ouroboros effect is most pronounced in models trained with CAI (Constitutional AI), where refusal has high effective dimensionality and spreads across many layers. DPO-trained models tend to have more concentrated, single-direction refusal that is easier to eliminate in one pass.
+</Warning>
+
+OBLITERATUS detects and compensates for this in two ways:
+
+1. **Static prediction**: The `DefenseRobustnessEvaluator` computes a redundancy ratio $R_l$ before excision, estimating how much refusal signal exists outside each layer. High $R_l$ predicts self-repair capacity.
+
+2. **Dynamic compensation**: The `InformedAbliterationPipeline` re-probes the model after each excision pass. If post-excision refusal rate remains above threshold, additional targeted passes fire automatically at the compensating layers.
+
+The `aggressive` and `nuclear` methods run 3–4 refinement passes with true iterative re-probing between passes. Each pass re-collects activations, extracts residual directions, and projects again — until the refusal signal is eliminated or the pass budget is exhausted.
+
+---
+
+## Using the pipeline in code
+
+```python
+from obliteratus.abliterate import AbliterationPipeline
+
+# Run the full six-stage pipeline
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",       # 4-direction SVD, norm-preserving, 2 passes
+    output_dir="abliterated",
+)
+result_path = pipeline.run()
+
+# Inspect intermediate artifacts
+directions = pipeline.refusal_directions    # {layer_idx: tensor(hidden_dim,)}
+subspaces = pipeline.refusal_subspaces      # {layer_idx: tensor(k, hidden_dim)}
+strong_layers = pipeline._strong_layers     # [layer indices with strong signal]
+metrics = pipeline._quality_metrics         # perplexity, refusal_rate, kl_divergence, ...
+```
+
+### Hooking into stage progress
+
+```python
+from obliteratus.abliterate import AbliterationPipeline, StageResult
+
+def on_stage(result: StageResult):
+    print(f"[{result.stage.upper()}] {result.status}: {result.message}")
+    if result.status == "done" and result.stage == "distill":
+        print(f"  Strong layers: {result.details.get('strong_layers', [])}")
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",
+    on_stage=on_stage,
+    on_log=print,
+)
+pipeline.run()
+```
+
+### Analysis-informed pipeline
+
+For maximum precision, the `InformedAbliterationPipeline` runs analysis modules during the pipeline to auto-configure every decision:
+
+```python
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+pipeline = InformedAbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_informed",
+)
+output_path, report = pipeline.run_informed()
+
+print(f"Detected alignment method: {report.insights.detected_alignment_method}")
+print(f"Auto-configured directions: {report.insights.recommended_n_directions}")
+print(f"Ouroboros passes needed: {report.ouroboros_passes}")
+```
+
+The ANALYZE stage (inserted between PROBE and DISTILL) runs four modules — Alignment Imprint Detection, Concept Cone Geometry, Cross-Layer Alignment, and Defense Robustness — and uses their outputs to configure the downstream stages automatically.

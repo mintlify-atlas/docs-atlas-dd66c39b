@@ -1,0 +1,341 @@
+---
+title: "InformedAbliterationPipeline"
+description: "API reference for the analysis-informed pipeline that auto-configures abliteration parameters from model geometry."
+---
+
+## Overview
+
+`InformedAbliterationPipeline` extends `AbliterationPipeline` with a new **ANALYZE** stage inserted between PROBE and DISTILL. Five analysis modules run on the collected activations and their outputs automatically configure direction extraction, layer selection, regularization, and refinement strategy — no manual tuning required.
+
+```
+SUMMON → PROBE → ANALYZE → DISTILL → EXCISE → VERIFY → REBIRTH
+                    ↑
+            auto-configures ↓
+         n_directions, regularization, layers,
+         direction_method, refinement_passes
+```
+
+```python
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+pipeline = InformedAbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_informed",
+)
+output_path, report = pipeline.run_informed()
+
+print(f"Detected alignment: {report.insights.detected_alignment_method}")
+print(f"Cone type: {'polyhedral' if report.insights.cone_is_polyhedral else 'linear'}")
+print(f"Refusal rate: {report.final_refusal_rate:.0%}")
+print(f"Ouroboros passes: {report.ouroboros_passes}")
+```
+
+---
+
+## Class: `obliteratus.informed_pipeline.InformedAbliterationPipeline`
+
+Inherits all parameters from `AbliterationPipeline`. The additional parameters below control the ANALYZE stage.
+
+### Constructor
+
+#### Base Parameters (inherited)
+
+All `AbliterationPipeline` constructor parameters are accepted. The `method` argument is fixed to `"informed"` internally; the base pipeline is initialized with `method="advanced"` and then overridden.
+
+<ParamField path="model_name" type="str" required>
+  HuggingFace model name or local path.
+</ParamField>
+
+<ParamField path="output_dir" type="str" default="abliterated_informed">
+  Output directory for the saved model and metadata.
+</ParamField>
+
+<ParamField path="device" type="str" default="auto">
+  Device for model execution.
+</ParamField>
+
+<ParamField path="dtype" type="str" default="float16">
+  Model dtype.
+</ParamField>
+
+<ParamField path="trust_remote_code" type="bool" default="True">
+  Pass to `AutoModelForCausalLM`. Defaults to `True` for informed pipeline (wider model support).
+</ParamField>
+
+<ParamField path="harmful_prompts" type="list[str] | None" default="None">
+  Custom harmful prompts. Defaults to the built-in 512-pair dataset.
+</ParamField>
+
+<ParamField path="harmless_prompts" type="list[str] | None" default="None">
+  Custom harmless prompts.
+</ParamField>
+
+<ParamField path="on_stage" type="Callable[[StageResult], None] | None" default="None">
+  Stage-change callback. Receives `StageResult` objects including the new `"analyze"` stage key.
+</ParamField>
+
+<ParamField path="on_log" type="Callable[[str], None] | None" default="None">
+  Log message callback.
+</ParamField>
+
+<ParamField path="quantization" type="str | None" default="None">
+  Quantization mode: `"4bit"` or `"8bit"`.
+</ParamField>
+
+#### Analysis Module Flags
+
+<ParamField path="run_cone_analysis" type="bool" default="True">
+  Run `ConceptConeAnalyzer` to detect linear vs. polyhedral refusal geometry. Informs `n_directions` and `direction_method`.
+</ParamField>
+
+<ParamField path="run_alignment_detection" type="bool" default="True">
+  Run `AlignmentImprintDetector` to classify DPO / RLHF / CAI / SFT. Informs `regularization` and `kl_budget`.
+</ParamField>
+
+<ParamField path="run_cross_layer_analysis" type="bool" default="True">
+  Run `CrossLayerAlignmentAnalyzer` for cluster-aware layer selection.
+</ParamField>
+
+<ParamField path="run_sparse_analysis" type="bool" default="True">
+  Run `SparseDirectionSurgeon` to compute Refusal Sparsity Index. Enables sparse surgery when RSI is high.
+</ParamField>
+
+<ParamField path="run_defense_analysis" type="bool" default="True">
+  Run `DefenseRobustnessEvaluator` to estimate self-repair risk and entanglement. Informs `refinement_passes` and layer skipping.
+</ParamField>
+
+#### Ouroboros Compensation Parameters
+
+<ParamField path="ouroboros_threshold" type="float" default="0.5">
+  If post-excision refusal rate exceeds this value, trigger additional Ouroboros compensation passes (re-probe → re-distill → re-excise).
+</ParamField>
+
+<ParamField path="max_ouroboros_passes" type="int" default="3">
+  Maximum number of Ouroboros compensation loops.
+</ParamField>
+
+#### Entanglement & Sparsity Thresholds
+
+<ParamField path="entanglement_gate" type="float" default="0.8">
+  Layers with entanglement score above this value are skipped during excision to protect capabilities.
+</ParamField>
+
+<ParamField path="sparse_surgery_threshold" type="float" default="0.5">
+  RSI threshold above which sparse surgery is used instead of dense projection.
+</ParamField>
+
+---
+
+## Method: `run_informed()`
+
+```python
+def run_informed(self) -> tuple[Path, InformedPipelineReport]
+```
+
+Executes the full analysis-informed pipeline and returns a `(output_path, report)` tuple.
+
+<ResponseField name="output_path" type="Path">
+  Path to the saved abliterated model directory.
+</ResponseField>
+
+<ResponseField name="report" type="InformedPipelineReport">
+  Complete report with analysis insights, pipeline stats, and Ouroboros results.
+</ResponseField>
+
+---
+
+## `InformedPipelineReport`
+
+```python
+@dataclass
+class InformedPipelineReport:
+    insights: AnalysisInsights
+    stages: list[StageResult]
+    analysis_duration: float
+    total_duration: float
+    ouroboros_passes: int
+    final_refusal_rate: float
+```
+
+<ResponseField name="insights" type="AnalysisInsights">
+  Complete analysis insights from the ANALYZE stage. See `AnalysisInsights` below.
+</ResponseField>
+
+<ResponseField name="stages" type="list[StageResult]">
+  Ordered list of `StageResult` objects from every pipeline stage.
+</ResponseField>
+
+<ResponseField name="analysis_duration" type="float">
+  Seconds spent in the ANALYZE stage.
+</ResponseField>
+
+<ResponseField name="total_duration" type="float">
+  Total wall-clock seconds for the entire pipeline.
+</ResponseField>
+
+<ResponseField name="ouroboros_passes" type="int">
+  Number of additional compensation passes triggered because refusal rate exceeded `ouroboros_threshold`.
+</ResponseField>
+
+<ResponseField name="final_refusal_rate" type="float">
+  Refusal rate measured after all passes (including Ouroboros compensation).
+</ResponseField>
+
+---
+
+## `AnalysisInsights`
+
+Populated by the ANALYZE stage. All fields are derived from the five analysis modules.
+
+### Alignment Imprint
+
+<ResponseField name="detected_alignment_method" type="str">
+  Predicted training method: `"dpo"`, `"rlhf"`, `"cai"`, `"sft"`, or `"unknown"`.
+</ResponseField>
+
+<ResponseField name="alignment_confidence" type="float">
+  Confidence score for the prediction (0.0–1.0).
+</ResponseField>
+
+<ResponseField name="alignment_probabilities" type="dict[str, float]">
+  Softmax probability for each method: `{"dpo": ..., "rlhf": ..., "cai": ..., "sft": ...}`.
+</ResponseField>
+
+### Concept Cone Geometry
+
+<ResponseField name="cone_is_polyhedral" type="bool">
+  `True` if the refusal subspace is polyhedral (multiple distinct directions), `False` if linear (single direction).
+</ResponseField>
+
+<ResponseField name="cone_dimensionality" type="float">
+  Effective dimensionality of the refusal cone (1.0 = linear, >2.0 = clearly polyhedral).
+</ResponseField>
+
+<ResponseField name="mean_pairwise_cosine" type="float">
+  Mean pairwise cosine similarity between per-category refusal directions.
+</ResponseField>
+
+<ResponseField name="per_category_directions" type="dict[str, torch.Tensor]">
+  Per-harm-category refusal directions (e.g., `{"weapons": ..., "cyber": ...}`).
+</ResponseField>
+
+### Cross-Layer Structure
+
+<ResponseField name="direction_clusters" type="list[list[int]]">
+  Layer clusters grouped by refusal-direction similarity.
+</ResponseField>
+
+<ResponseField name="cluster_count" type="int">
+  Number of distinct refusal-direction clusters detected.
+</ResponseField>
+
+<ResponseField name="direction_persistence" type="float">
+  0 = completely independent per layer, 1 = single persistent direction across all layers.
+</ResponseField>
+
+<ResponseField name="cluster_representative_layers" type="list[int]">
+  Strongest layer (by refusal norm) from each cluster — used as warm-start for Bayesian optimizer.
+</ResponseField>
+
+### Defense Robustness
+
+<ResponseField name="estimated_robustness" type="str">
+  Estimated alignment defense strength: `"low"`, `"medium"`, `"high"`, or `"very_high"`.
+</ResponseField>
+
+<ResponseField name="self_repair_estimate" type="float">
+  Estimated Ouroboros self-repair capacity (0.0–1.0). Values above 0.7 trigger 3 refinement passes.
+</ResponseField>
+
+<ResponseField name="entanglement_score" type="float">
+  Overall safety-capability entanglement (0 = fully separable, 1 = fully fused).
+</ResponseField>
+
+<ResponseField name="entangled_layers" type="list[int]">
+  Layers above the entanglement gate — skipped during excision.
+</ResponseField>
+
+<ResponseField name="clean_layers" type="list[int]">
+  Layers where refusal can be cleanly separated from capability.
+</ResponseField>
+
+### Derived Configuration
+
+These fields reflect what the pipeline actually used, after the analysis override:
+
+<ResponseField name="recommended_n_directions" type="int">
+  Final number of directions chosen by analysis.
+</ResponseField>
+
+<ResponseField name="recommended_direction_method" type="str">
+  Final direction method: `"diff_means"`, `"svd"`, or `"leace"`.
+</ResponseField>
+
+<ResponseField name="recommended_regularization" type="float">
+  Final regularization value derived from alignment method + entanglement score.
+</ResponseField>
+
+<ResponseField name="recommended_refinement_passes" type="int">
+  Final pass count derived from self-repair estimate.
+</ResponseField>
+
+<ResponseField name="recommended_layers" type="list[int]">
+  Final layer selection after cluster analysis and entanglement gating.
+</ResponseField>
+
+<ResponseField name="skip_layers" type="list[int]">
+  Layers excluded from excision due to high entanglement.
+</ResponseField>
+
+---
+
+## Code Examples
+
+<CodeGroup>
+```python Basic Informed Run
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+pipeline = InformedAbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_informed",
+)
+output_path, report = pipeline.run_informed()
+
+print(InformedAbliterationPipeline.format_insights(report.insights))
+```
+
+```python Disable Specific Analysis Modules
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+pipeline = InformedAbliterationPipeline(
+    model_name="Qwen/Qwen2.5-7B-Instruct",
+    # Skip sparse analysis for speed
+    run_sparse_analysis=False,
+    # Tighten Ouroboros threshold
+    ouroboros_threshold=0.3,
+    max_ouroboros_passes=5,
+    # Gate highly entangled layers aggressively
+    entanglement_gate=0.6,
+)
+output_path, report = pipeline.run_informed()
+insights = report.insights
+print(f"Used {insights.recommended_n_directions} directions via {insights.recommended_direction_method}")
+print(f"Skipped entangled layers: {insights.skip_layers}")
+```
+
+```python Inspect Report Fields
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+pipeline = InformedAbliterationPipeline(model_name="mistralai/Mistral-7B-Instruct-v0.3")
+_, report = pipeline.run_informed()
+
+i = report.insights
+print(f"Alignment: {i.detected_alignment_method} ({i.alignment_confidence:.0%} confidence)")
+print(f"Cone: {'polyhedral' if i.cone_is_polyhedral else 'linear'}, dim={i.cone_dimensionality:.2f}")
+print(f"Clusters: {i.cluster_count} groups")
+print(f"Self-repair risk: {i.self_repair_estimate:.2f}")
+print(f"Ouroboros passes applied: {report.ouroboros_passes}")
+print(f"Final refusal rate: {report.final_refusal_rate:.0%}")
+print(f"Analysis took: {report.analysis_duration:.1f}s")
+```
+</CodeGroup>

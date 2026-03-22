@@ -1,0 +1,172 @@
+---
+title: "Community Leaderboard"
+description: "Live, community-aggregated ranking of obliteration methods, models, and configurations."
+---
+
+The community leaderboard aggregates benchmark results from every opt-in run across all contributors — local runs, Spaces runs, and PR-contributed JSON files — into a ranked view of which methods work best on which models.
+
+## What the leaderboard shows
+
+Results are grouped by `(model_id, method)` pair and ranked by lowest `best_refusal` first, then by lowest `best_perplexity`.
+
+For each group, the leaderboard computes:
+
+| Column | Description |
+|---|---|
+| `model` | Short model name (last component of the HuggingFace ID) |
+| `method` | Obliteration method (`basic`, `advanced`, `surgical`, etc.) |
+| `runs` | Number of contributing runs for this combination |
+| `best_refusal` | Lowest refusal rate recorded across all runs |
+| `avg_refusal` | Mean refusal rate |
+| `best_perplexity` | Lowest perplexity recorded |
+| `avg_perplexity` | Mean perplexity |
+| `avg_coherence` | Mean coherence score |
+| `avg_time_s` | Mean wall-clock time in seconds |
+| `gpu` | GPU from the most recent contributing run |
+| `last_run` | Timestamp of the most recent contributing run |
+
+Error runs (where the pipeline failed) are excluded from aggregation.
+
+## How to access the leaderboard
+
+<Tabs>
+  <Tab title="Web (HuggingFace Spaces)">
+    Open the **Leaderboard** tab on the public OBLITERATUS Space. The tab reads from both local session data and the central Hub dataset (`pliny-the-prompter/OBLITERATUS-TELEMETRY`), merging and deduplicating all contributions in real time.
+  </Tab>
+
+  <Tab title="CLI: summary">
+    ```bash
+    obliteratus aggregate --format summary
+    ```
+
+    Prints a ranked table to stdout showing method, model, run count, and key metrics.
+  </Tab>
+
+  <Tab title="CLI: LaTeX">
+    ```bash
+    obliteratus aggregate --format latex --metric refusal_rate --min-runs 3
+    ```
+
+    Outputs a LaTeX `tabular` environment suitable for direct inclusion in a paper. The `--min-runs 3` flag filters out model/method combinations with fewer than three contributing runs, reducing noise.
+
+    Available `--metric` values: `refusal_rate`, `perplexity`, `coherence`.
+  </Tab>
+</Tabs>
+
+## The `aggregate` command
+
+The CLI `aggregate` command reads contribution JSON files from a local directory and prints aggregated statistics:
+
+```bash
+# Aggregate from the default community_results/ directory
+obliteratus aggregate --format summary
+
+# Aggregate from a custom directory
+obliteratus aggregate --dir ./my_results --format summary
+
+# Generate a LaTeX table filtered to refusal_rate with at least 3 runs
+obliteratus aggregate --format latex --metric refusal_rate --min-runs 3
+
+# Generate a LaTeX table for coherence
+obliteratus aggregate --format latex --metric coherence
+```
+
+## How aggregation works
+
+The `aggregate_results()` function in `community.py` groups records by `(model_name, method)` and computes summary statistics for each metric:
+
+```python
+from obliteratus.community import load_contributions, aggregate_results
+
+# Load all contribution JSON files from community_results/
+records = load_contributions("community_results")
+
+# Aggregate into per-model, per-method summaries
+aggregated = aggregate_results(records)
+
+# Structure: {model_name: {method: {metric: {mean, std, n, min, max}}}}
+for model, methods in aggregated.items():
+    for method, summary in methods.items():
+        print(f"{model} / {method}: {summary['n_runs']} runs")
+        if "refusal_rate" in summary:
+            rr = summary["refusal_rate"]
+            print(f"  refusal_rate: {rr['mean']:.4f} ± {rr['std']:.4f} (n={rr['n']})")
+```
+
+The returned structure for each metric contains:
+
+| Key | Description |
+|---|---|
+| `mean` | Arithmetic mean across all runs |
+| `std` | Sample standard deviation (0.0 if only one run) |
+| `n` | Number of runs contributing this metric |
+| `min` | Minimum value |
+| `max` | Maximum value |
+
+## Generating LaTeX tables
+
+Use `generate_latex_table()` to produce paper-ready tables directly from aggregated data:
+
+```python
+from obliteratus.community import load_contributions, aggregate_results, generate_latex_table
+
+records = load_contributions("community_results")
+aggregated = aggregate_results(records)
+
+# Table showing refusal_rate for all methods
+latex = generate_latex_table(aggregated, metric="refusal_rate")
+print(latex)
+
+# Table limited to specific methods
+latex = generate_latex_table(
+    aggregated,
+    methods=["basic", "advanced", "surgical"],
+    metric="perplexity",
+)
+```
+
+The output is a complete `tabular` environment with `\toprule` / `\midrule` / `\bottomrule` formatting. Values are displayed as `mean ± std (n)` when multiple runs exist, or `mean (n)` for single-run entries. Missing combinations are shown as `---`.
+
+## The `recommend` command
+
+The `recommend` command uses community telemetry to suggest the best method for a specific model, based on historical data from runs on that model or models in the same family:
+
+```bash
+# Get a method recommendation for a specific model
+obliteratus recommend meta-llama/Llama-3.1-8B-Instruct
+
+# With detailed insights from the analysis modules
+obliteratus recommend meta-llama/Llama-3.1-8B-Instruct --insights
+```
+
+With `--insights`, the command also runs a subset of the analysis modules locally (alignment imprint detection, concept cone geometry) and factors those results into the recommendation.
+
+## Interpreting leaderboard data
+
+<AccordionGroup>
+  <Accordion title="What does low refusal rate + high coherence mean?">
+    A run with low `refusal_rate` and high `coherence` is the ideal outcome: the model's guardrails have been removed (it responds to previously-refused prompts) while its general language capabilities are intact (outputs remain coherent and fluent).
+
+    A low refusal rate with low coherence suggests over-aggressive obliteration — too many directions projected out, or a method that is damaging general capabilities alongside the refusal mechanism.
+
+    A high coherence with high refusal rate means the model still refuses — the obliteration was incomplete.
+  </Accordion>
+
+  <Accordion title="What does perplexity measure?">
+    Perplexity is the standard language modeling metric: the model's uncertainty on a held-out text corpus. A well-obliterated model should have perplexity close to the baseline model. A large increase in perplexity signals that the weight modifications damaged the model's language modeling ability.
+
+    Compare `best_perplexity` on the leaderboard against the known baseline perplexity for the model family.
+  </Accordion>
+
+  <Accordion title="How much weight should I give to runs with n=1?">
+    Single-run entries (`runs: 1`) have no variance estimate and may reflect hardware-specific anomalies. Look for entries with `runs >= 3` for reliable conclusions. Use `--min-runs 3` with the `aggregate` command to filter automatically.
+  </Accordion>
+
+  <Accordion title="Why are some model/method combinations missing?">
+    The leaderboard only shows combinations that have been contributed. If a combination you care about is missing, run it yourself and contribute the results — that data will appear the next time the leaderboard is refreshed.
+  </Accordion>
+
+  <Accordion title="How are Hub records and local records merged?">
+    `get_leaderboard_data()` in `telemetry.py` fetches records from both the local `telemetry.jsonl` and the central Hub dataset, then deduplicates by `(session_id, timestamp)` before aggregating. This means running `obliteratus aggregate` locally will include both your own runs and any community runs synced from the Hub.
+  </Accordion>
+</AccordionGroup>

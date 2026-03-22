@@ -1,0 +1,441 @@
+---
+title: "AbliterationPipeline"
+description: "Complete API reference for the core OBLITERATUS abliteration pipeline class."
+---
+
+
+## Overview
+
+`AbliterationPipeline` is the core class for removing refusal directions from a HuggingFace language model. It runs a six-stage pipeline — **SUMMON → PROBE → DISTILL → EXCISE → VERIFY → REBIRTH** — and writes the liberated model to disk.
+
+```python
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_llama",
+    method="advanced",
+)
+output_path = pipeline.run()
+print(f"Model saved to {output_path}")
+```
+
+---
+
+## Class: `obliteratus.abliterate.AbliterationPipeline`
+
+### Constructor
+
+```python
+AbliterationPipeline(
+    model_name,
+    output_dir="abliterated",
+    device="auto",
+    dtype="float16",
+    method="advanced",
+    ...
+)
+```
+
+#### Core Parameters
+
+<ParamField path="model_name" type="str" required>
+  HuggingFace model name or local path (e.g., `"meta-llama/Llama-3.1-8B-Instruct"`).
+</ParamField>
+
+<ParamField path="output_dir" type="str" default="abliterated">
+  Directory to write the abliterated model and metadata JSON.
+</ParamField>
+
+<ParamField path="device" type="str" default="auto">
+  Device to run on. `"auto"` uses `accelerate` device maps; also accepts `"cuda"`, `"cpu"`, `"mps"`.
+</ParamField>
+
+<ParamField path="dtype" type="str" default="float16">
+  Model dtype. One of `"float16"`, `"bfloat16"`, `"float32"`.
+</ParamField>
+
+<ParamField path="trust_remote_code" type="bool" default="False">
+  Pass `trust_remote_code=True` to `AutoModelForCausalLM` for models with custom architectures.
+</ParamField>
+
+<ParamField path="method" type="str" default="advanced">
+  Abliteration method preset. See [Methods](#methods) below for all 13 presets.
+</ParamField>
+
+#### Method-Override Parameters
+
+All parameters below override the corresponding value in the chosen `method` preset. Pass `None` (default) to use the preset's value.
+
+<ParamField path="n_directions" type="int | None" default="None">
+  Number of refusal directions to extract. Preset values range from 1 (basic) to 8 (surgical/inverted).
+</ParamField>
+
+<ParamField path="direction_method" type="str | None" default="None">
+  Algorithm for extracting directions. One of `"diff_means"`, `"svd"`, `"leace"`.
+</ParamField>
+
+<ParamField path="regularization" type="float | None" default="None">
+  Fraction of the refusal component to preserve (0.0 = full removal, 1.0 = no change). Maps to ridge alpha.
+</ParamField>
+
+<ParamField path="refinement_passes" type="int | None" default="None">
+  Number of iterative PROBE → DISTILL → EXCISE loops. Higher values remove more stubborn refusal at the cost of compute.
+</ParamField>
+
+#### Hub Parameters
+
+<ParamField path="push_to_hub" type="str | None" default="None">
+  HuggingFace repo ID to push the finished model to (e.g., `"my-org/my-model-OBLITERATED"`).
+</ParamField>
+
+<ParamField path="hub_token" type="str | None" default="None">
+  HuggingFace API token. Falls back to `HF_TOKEN` environment variable.
+</ParamField>
+
+<ParamField path="hub_community_org" type="str | None" default="None">
+  Org namespace for auto-generated Hub repo ID.
+</ParamField>
+
+#### Data Parameters
+
+<ParamField path="harmful_prompts" type="list[str] | None" default="None">
+  Custom list of harmful prompts for activation collection. Defaults to the built-in 512-pair dataset.
+</ParamField>
+
+<ParamField path="harmless_prompts" type="list[str] | None" default="None">
+  Custom list of harmless prompts. Must be the same length as `harmful_prompts` when `n_directions > 1`.
+</ParamField>
+
+<ParamField path="jailbreak_prompts" type="list[str] | None" default="None">
+  Custom jailbreak prompts for contrastive direction refinement (used when `use_jailbreak_contrast=True`).
+</ParamField>
+
+#### Hardware / Memory Parameters
+
+<ParamField path="quantization" type="str | None" default="None">
+  Load with quantization: `"4bit"` or `"8bit"`. Requires `bitsandbytes`.
+</ParamField>
+
+<ParamField path="large_model_mode" type="bool" default="False">
+  Conservative defaults for 120B+ models: caps `n_directions` at 4, `n_sae_features` at 4, and `refinement_passes` at 1 unless explicitly overridden.
+</ParamField>
+
+<ParamField path="max_seq_length" type="int | None" default="None">
+  Override truncation length for all internal tokenizer calls. `None` uses context-dependent defaults (256 for probes, 512 for verify).
+</ParamField>
+
+<ParamField path="verify_sample_size" type="int | None" default="30">
+  Number of harmful prompts tested in the VERIFY stage for refusal-rate measurement. Increase to `100` for tighter confidence intervals.
+</ParamField>
+
+#### Callback Parameters
+
+<ParamField path="on_stage" type="Callable[[StageResult], None] | None" default="None">
+  Callback fired on every stage status change. Receives a `StageResult` object — useful for progress UIs.
+</ParamField>
+
+<ParamField path="on_log" type="Callable[[str], None] | None" default="None">
+  Callback fired for every log message emitted by the pipeline.
+</ParamField>
+
+#### SOTA Technique Flags
+
+<ParamField path="use_jailbreak_contrast" type="bool | None" default="None">
+  Refine directions by contrasting jailbroken responses against direct harmful prompts.
+</ParamField>
+
+<ParamField path="layer_adaptive_strength" type="bool | None" default="None">
+  Scale projection strength per-layer based on measured refusal signal magnitude.
+</ParamField>
+
+<ParamField path="safety_neuron_masking" type="bool | None" default="None">
+  Mask out the specific neurons most responsible for safety behavior before projection.
+</ParamField>
+
+<ParamField path="per_expert_directions" type="bool | None" default="None">
+  Extract separate refusal directions per MoE expert (uses router profiling hooks).
+</ParamField>
+
+<ParamField path="attention_head_surgery" type="bool | None" default="None">
+  Apply targeted projection to the top safety-attributable attention heads.
+</ParamField>
+
+<ParamField path="use_sae_features" type="bool | None" default="None">
+  Extract and abliterate SAE-identified refusal features.
+</ParamField>
+
+<ParamField path="invert_refusal" type="bool | None" default="None">
+  Reflect the refusal direction rather than project it out — makes the model actively compliant instead of neutral.
+</ParamField>
+
+<ParamField path="use_whitened_svd" type="bool | None" default="None">
+  Use covariance-whitened SVD (WhitenedSVDExtractor) for cleaner direction extraction.
+</ParamField>
+
+<ParamField path="true_iterative_refinement" type="bool | None" default="None">
+  Re-probe the model between refinement passes to track direction rotation.
+</ParamField>
+
+#### Nuclear-Mode Parameters
+
+<ParamField path="reflection_strength" type="float | None" default="None">
+  Reflection multiplier when `invert_refusal=True`. `2.0` = full inversion; `1.25` = tempered (nuclear default).
+</ParamField>
+
+<ParamField path="project_embeddings" type="bool | None" default="False">
+  Also project refusal from the token embedding matrix.
+</ParamField>
+
+<ParamField path="embed_regularization" type="float | None" default="None">
+  Regularization fraction for embedding projection.
+</ParamField>
+
+<ParamField path="activation_steering" type="bool | None" default="False">
+  Install lightweight inference-time steering hooks as residual cleanup after weight editing.
+</ParamField>
+
+<ParamField path="steering_strength" type="float | None" default="None">
+  Alpha for activation steering hooks.
+</ParamField>
+
+<ParamField path="expert_transplant" type="bool | None" default="False">
+  Blend safety-expert weights into capability experts (nuclear mode only).
+</ParamField>
+
+<ParamField path="transplant_blend" type="float | None" default="None">
+  Blend ratio for expert transplant (0.0–1.0).
+</ParamField>
+
+<ParamField path="n_sae_features" type="int | None" default="None">
+  Number of SAE features to abliterate per layer.
+</ParamField>
+
+#### Heretic-Inspired Parameters
+
+<ParamField path="winsorize_activations" type="bool | None" default="None">
+  Clamp outlier activations by symmetric quantile before direction extraction.
+</ParamField>
+
+<ParamField path="winsorize_percentile" type="float | None" default="None">
+  Quantile for winsorization (e.g., `0.01` = clamp at 1st/99th percentile).
+</ParamField>
+
+<ParamField path="use_kl_optimization" type="bool | None" default="None">
+  Co-minimize refusal rate and KL divergence during Bayesian optimization.
+</ParamField>
+
+<ParamField path="kl_budget" type="float | None" default="None">
+  Maximum allowed KL divergence increase. Acts as a capability-preservation constraint.
+</ParamField>
+
+<ParamField path="float_layer_interpolation" type="bool | None" default="None">
+  Use continuous (float) layer indices with linear interpolation between adjacent layers' directions.
+</ParamField>
+
+<ParamField path="cot_aware" type="bool | None" default="None">
+  Detect and preserve chain-of-thought reasoning directions to maintain CoT capability.
+</ParamField>
+
+<ParamField path="use_wasserstein_optimal" type="bool | None" default="None">
+  Use Wasserstein-optimal transport for direction extraction.
+</ParamField>
+
+<ParamField path="layer_selection" type="str | None" default="None">
+  Layer selection strategy: `"knee_cosmic"` (default), `"all"`, `"all_except_first"`, `"top_k"`. 
+</ParamField>
+
+<ParamField path="rdo_refinement" type="bool | None" default="None">
+  Refine directions via gradient-based optimization against a linear refusal probe (RDO method).
+</ParamField>
+
+#### Spectral Cascade Parameters
+
+<ParamField path="spectral_cascade" type="bool | None" default="None">
+  Enable DCT frequency-domain decomposition of the refusal signal across layers.
+</ParamField>
+
+<ParamField path="spectral_bands" type="int | None" default="None">
+  Number of frequency bands for spectral cascade (default: 3).
+</ParamField>
+
+<ParamField path="spectral_threshold" type="float | None" default="None">
+  Minimum signal power below which a frequency band is skipped.
+</ParamField>
+
+---
+
+## Method: `run()`
+
+```python
+def run(self) -> Path
+```
+
+Executes the full abliteration pipeline. Returns the `Path` to the saved model directory.
+
+The pipeline runs six stages in sequence:
+
+| # | Stage | What happens |
+|---|-------|--------------|
+| 1 | **SUMMON** | Load model and tokenizer into memory |
+| 2 | **PROBE** | Run harmful and harmless prompts, collect residual-stream activations |
+| 3 | **DISTILL** | Compute refusal directions via SVD / diff-means / LEACE |
+| 4 | **EXCISE** | Project refusal directions out of attention and FFN weight matrices |
+| 5 | **VERIFY** | Measure refusal rate, perplexity, coherence, and KL divergence |
+| 6 | **REBIRTH** | Save model weights + `abliteration_metadata.json` |
+
+<Note>Calling `run()` multiple times on the same instance replaces any steering hooks installed by the previous run before starting fresh.</Note>
+
+---
+
+## Post-Run Attributes
+
+After `run()` completes, the following attributes are populated:
+
+<ResponseField name="refusal_directions" type="dict[int, torch.Tensor]">
+  Per-layer primary refusal direction. Keys are layer indices; values are `(hidden_dim,)` unit tensors.
+</ResponseField>
+
+<ResponseField name="_strong_layers" type="list[int]">
+  Layer indices selected for weight modification (knee-detected or analysis-recommended).
+</ResponseField>
+
+<ResponseField name="_quality_metrics" type="dict[str, float]">
+  Quality metrics from the VERIFY stage.
+
+  <Expandable title="Fields">
+    <ResponseField name="perplexity" type="float">Model perplexity on harmless text after abliteration.</ResponseField>
+    <ResponseField name="coherence" type="float">Text coherence score (0–1).</ResponseField>
+    <ResponseField name="refusal_rate" type="float">Fraction of harmful prompts still refused (0.0 = none refused, 1.0 = all refused).</ResponseField>
+    <ResponseField name="kl_divergence" type="float">KL divergence between pre- and post-excision logit distributions. Lower = less capability damage.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## `StageResult` — Callback Payload
+
+The `on_stage` callback receives a `StageResult` dataclass on every status change:
+
+```python
+@dataclass
+class StageResult:
+    stage: str      # e.g. "summon", "probe", "distill", "excise", "verify", "rebirth"
+    status: str     # "running", "done", or "error"
+    message: str    # human-readable progress message
+    duration: float # elapsed seconds (populated when status == "done")
+    details: dict   # stage-specific data (layer counts, metrics, etc.)
+```
+
+---
+
+## Pipeline Stages
+
+The `STAGES` list is exported from `obliteratus.abliterate`:
+
+```python
+from obliteratus.abliterate import STAGES
+# STAGES is a list of PipelineStage(key, name, description)
+```
+
+| Key | Name | Description |
+|-----|------|-------------|
+| `summon` | SUMMON | Loading model into memory |
+| `probe` | PROBE | Probing refusal circuits with prompt pairs |
+| `distill` | DISTILL | Distilling refusal subspace via SVD decomposition |
+| `excise` | EXCISE | Excising refusal directions from weights |
+| `verify` | VERIFY | Verifying model coherence and measuring quality delta |
+| `rebirth` | REBIRTH | Saving the liberated model |
+
+---
+
+## Methods
+
+The `METHODS` dict is exported from `obliteratus.abliterate`. Pass the key to the `method` constructor argument.
+
+| Key | Label | n_dirs | dir_method | Notes |
+|-----|-------|--------|------------|-------|
+| `basic` | Basic (Arditi et al.) | 1 | diff_means | Single direction, no norm preservation |
+| `advanced` | Advanced | 4 | svd | Multi-direction + norm-preserving + regularization |
+| `aggressive` | Aggressive | 8 | svd | Whitened SVD + jailbreak contrast + attention surgery |
+| `spectral_cascade` | Spectral Cascade | 6 | svd | DCT frequency-domain decomposition across layers |
+| `informed` | Informed | 1 | diff_means | Analysis-guided; use `InformedAbliterationPipeline` |
+| `surgical` | Surgical | 8 | svd | Head surgery + SAE + neuron masking |
+| `inverted` | Inverted | 8 | svd | 2x reflection — inverts refusal logic |
+| `optimized` | Optimized | 4 | svd | Bayesian-tuned per-layer strengths (50 trials) |
+| `nuclear` | Nuclear | 4 | svd | Full combo: reflection + steering + expert transplant |
+| `failspy` | FailSpy baseline | 1 | diff_means | Reproduction of FailSpy/abliterator |
+| `gabliteration` | Gabliteration baseline | 4 | svd | Faithful Gülmez 2026 reproduction |
+| `heretic` | Heretic baseline | 1 | diff_means | Bayesian LoRA ablation (p-e-w) |
+| `rdo` | RDO baseline | 4 | svd | Gradient-refined probe-aligned directions |
+
+---
+
+## Code Examples
+
+<CodeGroup>
+```python Basic Usage
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_llama",
+    method="advanced",
+    device="auto",
+    dtype="bfloat16",
+)
+output_path = pipeline.run()
+print(f"Saved to: {output_path}")
+print(f"Refusal rate: {pipeline._quality_metrics['refusal_rate']:.0%}")
+print(f"KL divergence: {pipeline._quality_metrics['kl_divergence']:.4f}")
+```
+
+```python Advanced Usage — Callbacks & Overrides
+from obliteratus.abliterate import AbliterationPipeline, StageResult
+
+def on_stage(result: StageResult):
+    print(f"[{result.stage.upper()}] {result.status}: {result.message}")
+
+pipeline = AbliterationPipeline(
+    model_name="mistralai/Mistral-7B-Instruct-v0.3",
+    output_dir="abliterated_mistral",
+    method="aggressive",
+    # Override preset values
+    n_directions=6,
+    regularization=0.05,
+    refinement_passes=2,
+    verify_sample_size=100,
+    on_stage=on_stage,
+    on_log=print,
+)
+output_path = pipeline.run()
+```
+
+```python Push to HuggingFace Hub
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="Qwen/Qwen2.5-7B-Instruct",
+    output_dir="abliterated_qwen",
+    method="surgical",
+    push_to_hub="my-username/Qwen2.5-7B-OBLITERATED",
+    hub_token="hf_...",
+)
+pipeline.run()
+```
+
+```python Large Model (120B+)
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-70B-Instruct",
+    output_dir="abliterated_llama_70b",
+    method="advanced",
+    quantization="4bit",
+    large_model_mode=True,  # conservative memory defaults
+    device="auto",
+    dtype="bfloat16",
+)
+pipeline.run()
+```
+</CodeGroup>

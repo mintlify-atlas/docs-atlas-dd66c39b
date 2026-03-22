@@ -1,0 +1,88 @@
+---
+title: "Google Colab"
+description: "Obliterate models for free using Google Colab's T4 GPU."
+---
+
+<Card
+  title="Open in Google Colab"
+  icon="book-open"
+  href="https://colab.research.google.com/github/elder-plinius/OBLITERATUS/blob/main/notebooks/abliterate.ipynb"
+>
+  Free T4 GPU. No installation. Hit Run All.
+</Card>
+
+The OBLITERATUS Colab notebook gives you a complete obliteration workflow in a free cloud environment — no local GPU, no installation, no setup. Open the notebook, select your model from the dropdown, pick a method, and hit **Run All**.
+
+## What you can do in Colab
+
+<CardGroup cols={2}>
+  <Card title="Model selection" icon="list">
+    Pick any model from the built-in dropdown (populated from the 116-model registry), or type in any HuggingFace model ID directly.
+  </Card>
+  <Card title="Method selection" icon="flask">
+    Choose from all available liberation methods: `basic`, `advanced`, `aggressive`, `surgical`, `optimized`, `inverted`, `nuclear`, or `informed`.
+  </Card>
+  <Card title="Download result" icon="download">
+    After obliteration completes, download the saved model as a ZIP directly to your local machine from the Colab file browser.
+  </Card>
+  <Card title="Push to Hub" icon="upload">
+    Enter your HuggingFace token and target repo ID to push the obliterated model directly to your HuggingFace Hub account without downloading.
+  </Card>
+</CardGroup>
+
+## T4 GPU capabilities
+
+Colab's free tier provides an NVIDIA T4 with 15 GB of VRAM. This is sufficient for:
+
+| Model size | Fits on free T4? | Notes |
+|---|---|---|
+| Up to 3B params | Yes (full precision) | Fast, no quantization needed |
+| 7B–8B params | Yes (float16) | The standard research target; ~14 GB VRAM |
+| 13B params | Marginal | May require `float16` + careful batch sizing |
+| 13B params (4bit) | Yes | Use the quantization option in the notebook |
+| 30B+ params | No | Requires local hardware or Colab Pro with A100 |
+
+<Note>
+  Colab Pro and Colab Pro+ give access to A100 GPUs (40 GB or 80 GB VRAM), which can handle models up to 70B with 4-bit quantization. The notebook works identically on any tier.
+</Note>
+
+## Pushing results to HuggingFace Hub
+
+<Steps>
+  <Step title="Generate a HuggingFace token">
+    Go to your HuggingFace account settings → Access Tokens → New Token. Select **write** scope.
+  </Step>
+  <Step title="Create a target repository">
+    Create a new model repository on HuggingFace Hub (e.g. `your-username/llama-3-8b-obliterated`). It can be private.
+  </Step>
+  <Step title="Enter credentials in the notebook">
+    Paste your token and repo ID into the notebook's Hub push cell. The notebook uses `huggingface_hub.HfApi().upload_folder()` internally.
+  </Step>
+  <Step title="Run the push cell">
+    The obliterated model, tokenizer, and `abliteration_metadata.json` are all pushed to your repo. The metadata records the method, metrics, and pipeline configuration used.
+  </Step>
+</Steps>
+
+## Limitations
+
+<Warning>
+  Colab free tier sessions have a **maximum runtime of 12 hours** and will disconnect after a period of inactivity. Large models (7B+) can take 20–60 minutes to obliterate depending on method and hardware. Save your results or push to Hub before the session ends.
+</Warning>
+
+| Limitation | Details |
+|---|---|
+| **Session timeouts** | Free Colab sessions disconnect after ~90 minutes of inactivity and have a 12-hour hard cap. |
+| **GPU quota** | Colab allocates T4 GPUs from a shared pool. During high demand, you may get a CPU-only session or need to wait. |
+| **Disk space** | Free Colab instances have ~78 GB of disk. A 7B model in float16 takes ~14 GB; make sure you have room before downloading. |
+| **No persistent storage** | All files are lost when the session ends. Push to HuggingFace Hub or download before disconnecting. |
+| **Custom prompt sets** | The notebook uses the built-in prompt dataset. For custom harmful/harmless prompts, use the [Python API](/usage/python-api) locally. |
+
+## When to use Colab vs. alternatives
+
+| Scenario | Best option |
+|---|---|
+| First time, just want to try it | **Colab** |
+| Models up to 8B, no local GPU | **Colab** or [HuggingFace Spaces](/usage/huggingface-spaces) |
+| Models 8B–70B, own GPU | [Local Web UI](/usage/local-ui) or [CLI](/usage/cli) |
+| Scripted / automated runs | [CLI](/usage/cli) or [Python API](/usage/python-api) |
+| Reproducible research study | [YAML Configs](/usage/yaml-configs) |

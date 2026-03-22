@@ -1,0 +1,363 @@
+---
+title: "Python API"
+description: "Full programmatic control over the obliteration pipeline for research workflows."
+---
+
+The Python API exposes every intermediate artifact — activation tensors, direction vectors, quality metrics, analysis insights — so you can build on top of OBLITERATUS or integrate it into your own evaluation harness.
+
+```bash
+pip install -e .
+```
+
+---
+
+## AbliterationPipeline
+
+The core pipeline. Implements the 6-stage obliteration process (SUMMON → PROBE → DISTILL → EXCISE → VERIFY → REBIRTH).
+
+```python
+from obliteratus.abliterate import AbliterationPipeline
+```
+
+### Constructor
+
+```python
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",           # liberation method preset
+    output_dir="abliterated",    # where to save the result
+    device="auto",               # "auto", "cuda", "mps", or "cpu"
+    dtype="float16",             # "float16", "bfloat16", or "float32"
+    # Optional overrides (if omitted, method preset values are used)
+    n_directions=None,           # override: number of refusal directions
+    direction_method=None,       # override: "diff_means", "svd", or "leace"
+    regularization=None,         # override: float 0.0–1.0
+    refinement_passes=None,      # override: int
+    quantization=None,           # "4bit" or "8bit" (requires bitsandbytes)
+    large_model_mode=False,      # conservative defaults for 120B+ models
+    verify_sample_size=None,     # override: number of prompts for refusal rate check
+    max_seq_length=None,         # override tokenizer truncation length
+    # Callbacks
+    on_stage=None,               # Callable[[StageResult], None]
+    on_log=None,                 # Callable[[str], None]
+    # Hub push (optional)
+    push_to_hub=None,            # HF repo ID to push result to
+    hub_token=None,              # HF token (falls back to HF_TOKEN env var)
+)
+```
+
+### run()
+
+```python
+result_path = pipeline.run()
+# Returns: str — path to the saved obliterated model directory
+```
+
+Runs the full 6-stage pipeline. The returned path can be passed directly to `AutoModelForCausalLM.from_pretrained()`.
+
+### Accessing artifacts
+
+After `pipeline.run()` completes, intermediate artifacts are available as attributes:
+
+```python
+# Refusal directions extracted during DISTILL
+# Dict mapping layer index → direction tensor (shape: [hidden_size])
+directions = pipeline.refusal_directions   # dict[int, torch.Tensor]
+
+# Layers with the strongest refusal signal (used for excision)
+strong_layers = pipeline._strong_layers    # list[int]
+
+# Post-obliteration quality metrics from VERIFY
+metrics = pipeline._quality_metrics
+# {
+#   "refusal_rate":   float,   # 0.0 = never refuses, 1.0 = always refuses
+#   "perplexity":     float,   # language model perplexity (lower = more fluent)
+#   "coherence":      float,   # semantic coherence score (higher = better)
+#   "kl_divergence":  float,   # KL from base model distribution (lower = less damage)
+# }
+```
+
+### Full example
+
+```python
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",
+    output_dir="abliterated",
+    max_seq_length=512,
+)
+result_path = pipeline.run()
+
+print(f"Saved to: {result_path}")
+print(f"Refusal rate: {pipeline._quality_metrics['refusal_rate']:.3f}")
+print(f"Perplexity:   {pipeline._quality_metrics['perplexity']:.2f}")
+print(f"Coherence:    {pipeline._quality_metrics['coherence']:.3f}")
+
+# Load and use the result
+from transformers import AutoModelForCausalLM
+model = AutoModelForCausalLM.from_pretrained(result_path)
+```
+
+---
+
+## InformedAbliterationPipeline
+
+Extends `AbliterationPipeline` with a new ANALYZE stage that runs between PROBE and DISTILL. Analysis module outputs auto-configure every downstream decision.
+
+```python
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+```
+
+### Constructor
+
+```python
+pipeline = InformedAbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_informed",
+    device="auto",
+    dtype="float16",
+    # Analysis modules to run (all on by default)
+    run_cone_analysis=True,           # ConceptConeAnalyzer
+    run_alignment_detection=True,     # AlignmentImprintDetector
+    run_cross_layer_analysis=True,    # CrossLayerAlignmentAnalyzer
+    run_sparse_analysis=True,         # SparseDirectionSurgeon
+    run_defense_analysis=True,        # DefenseRobustnessEvaluator
+    # Ouroboros compensation
+    ouroboros_threshold=0.5,          # refusal rate at VERIFY that triggers extra passes
+    max_ouroboros_passes=3,
+    # Entanglement gating
+    entanglement_gate=0.8,            # skip layers above this entanglement score
+    # Sparsity control
+    sparse_surgery_threshold=0.5,
+)
+```
+
+### run_informed()
+
+```python
+result_path, report = pipeline.run_informed()
+# Returns: (str, InformedPipelineReport)
+```
+
+### Report fields
+
+The `InformedPipelineReport` contains:
+
+```python
+report.insights.detected_alignment_method  # "dpo" | "rlhf" | "cai" | "sft" | "unknown"
+report.insights.alignment_confidence       # float: confidence in the detection
+report.insights.alignment_probabilities    # dict[str, float]: per-method probs
+
+report.insights.cone_is_polyhedral         # bool: True if refusal is multi-directional
+report.insights.cone_dimensionality        # float: effective dimensionality
+report.insights.recommended_n_directions   # int: auto-configured direction count
+
+report.insights.direction_clusters         # list[list[int]]: layer cluster groupings
+report.insights.cluster_count             # int
+report.insights.cluster_representative_layers  # list[int]: one per cluster
+
+report.insights.entangled_layers           # list[int]: layers skipped due to entanglement
+report.insights.clean_layers               # list[int]: layers safe to modify
+
+report.ouroboros_passes                    # int: extra passes triggered by self-repair
+report.final_refusal_rate                  # float: final refusal rate after all passes
+report.analysis_duration                   # float: seconds spent in ANALYZE stage
+report.total_duration                      # float: total pipeline seconds
+```
+
+### Full example
+
+```python
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+pipeline = InformedAbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_informed",
+)
+result_path, report = pipeline.run_informed()
+
+print(f"Detected alignment: {report.insights.detected_alignment_method}")
+print(f"Auto-configured:    {report.insights.recommended_n_directions} directions")
+print(f"Cone type:          {'polyhedral' if report.insights.cone_is_polyhedral else 'linear'}")
+print(f"Ouroboros passes:   {report.ouroboros_passes}")
+print(f"Final refusal rate: {report.final_refusal_rate:.3f}")
+print(f"Result saved to:    {result_path}")
+```
+
+---
+
+## Community functions
+
+Save and aggregate local contribution records.
+
+```python
+from obliteratus.community import save_contribution, load_contributions, aggregate_results
+```
+
+### save_contribution()
+
+```python
+contrib_path = save_contribution(
+    pipeline,
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    notes="A100 80GB, default prompts",
+    output_dir="community_results",   # default
+)
+# Generates: community_results/llama-3-1-8b-instruct_advanced_20260301_143052.json
+```
+
+### load_contributions() and aggregate_results()
+
+```python
+# Load all contribution JSONs from a directory
+records = load_contributions("community_results")
+
+# Aggregate into per-model, per-method statistics
+aggregated = aggregate_results(records)
+# aggregated["meta-llama/Llama-3.1-8B-Instruct"]["advanced"] =
+# {
+#   "n_runs": 12,
+#   "refusal_rate": {"mean": 0.04, "std": 0.01, "min": 0.02, "max": 0.07},
+#   "perplexity":   {"mean": 12.4, "std": 0.8,  ...},
+#   "coherence":    {"mean": 0.91, ...},
+# }
+```
+
+### Full contribution workflow
+
+```python
+from obliteratus.abliterate import AbliterationPipeline
+from obliteratus.community import save_contribution, load_contributions, aggregate_results
+
+# Run pipeline
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="advanced",
+    output_dir="abliterated",
+)
+pipeline.run()
+
+# Save contribution locally (submit via PR to share with the community)
+save_contribution(
+    pipeline,
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    notes="A100, default prompts",
+)
+
+# Aggregate all local contributions into paper tables
+records = load_contributions("community_results")
+aggregated = aggregate_results(records)
+```
+
+---
+
+## TourneyRunner
+
+Run a March Madness-style elimination tournament across all methods.
+
+```python
+from obliteratus.tourney import TourneyRunner
+
+runner = TourneyRunner(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    hub_org="my-org",           # HF org to push the winner
+    hub_repo=None,              # or full repo ID (overrides hub_org)
+    device="auto",
+    dtype="float16",
+    dataset_key="builtin",
+    quantization=None,
+    methods=None,               # None = all eligible methods
+    output_dir="/tmp/obliteratus_tourney",
+    on_log=None,                # Callable[[str], None]
+    on_round=None,              # Callable[[RoundResult], None]
+)
+
+result = runner.run()
+print(f"Winner:       {result.winner.method}")
+print(f"Score:        {result.winner.score:.4f}")
+print(f"Refusal rate: {result.winner.metrics['refusal_rate']}")
+print(f"Coherence:    {result.winner.metrics['coherence']}")
+if result.hub_repo:
+    print(f"Pushed to:    https://huggingface.co/{result.hub_repo}")
+```
+
+The tournament scoring composite (higher is better):
+- **35%** refusal removal
+- **25%** coherence
+- **20%** KL divergence (inverted: lower KL = higher score)
+- **10%** perplexity (inverted)
+- **5%** spectral certification
+- **5%** degenerate output penalty
+
+---
+
+## run_sweep / SweepConfig
+
+Systematically sweep hyperparameter grids to find optimal configurations.
+
+```python
+from obliteratus.sweep import run_sweep, SweepConfig
+
+config = SweepConfig(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    sweep_params={
+        "n_directions":   [1, 2, 4, 8],
+        "regularization": [0.0, 0.1, 0.3],
+    },
+    fixed_params={
+        "norm_preserve": True,
+        "method": "advanced",
+    },
+    output_dir="sweep_results",
+    seed=42,
+    n_seeds=1,          # run each config N times for variance estimates
+)
+
+results = run_sweep(config)
+for r in results:
+    print(f"n_directions={r.params['n_directions']}, "
+          f"reg={r.params['regularization']}: "
+          f"refusal={r.quality_metrics.get('refusal_rate', '?'):.3f}")
+```
+
+`run_sweep` returns a `list[SweepResult]`, one per `(param_config, seed)` pair. Each `SweepResult` has:
+- `params` — the hyperparameter values for this run
+- `quality_metrics` — full metrics dict from VERIFY
+- `stage_durations` — per-stage wall-clock seconds
+- `strong_layers` — layers with the strongest signal
+- `error` — exception message if the run failed, else `None`
+
+---
+
+## Steering vectors
+
+For reversible, inference-time refusal removal without touching model weights.
+
+```python
+from obliteratus.analysis import SteeringVectorFactory, SteeringHookManager
+from obliteratus.analysis.steering_vectors import SteeringConfig
+
+# Create from a pre-extracted refusal direction tensor
+vec = SteeringVectorFactory.from_refusal_direction(refusal_dir, alpha=-1.0)
+
+# Or from contrastive activation pairs
+vec = SteeringVectorFactory.from_contrastive_pairs(harmful_acts, harmless_acts)
+
+# Apply at inference time — no weight modification
+config = SteeringConfig(
+    vectors=[vec],
+    target_layers=[10, 11, 12, 13, 14, 15],
+)
+manager = SteeringHookManager()
+manager.install(model, config)
+
+# Generate with steering active
+output = model.generate(input_ids)
+
+# Remove steering — model returns to original behavior
+manager.remove()
+```
+
+Based on [Turner et al. (2023)](https://arxiv.org/abs/2308.10248) and [Rimsky et al. (2024)](https://arxiv.org/abs/2312.06681). Advantages over weight projection: fully reversible, tunable `alpha`, composable with multiple vectors, non-destructive.

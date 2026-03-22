@@ -1,0 +1,156 @@
+---
+title: "Optimized Method"
+description: "Bayesian auto-tuned obliteration with CoT-aware direction extraction and KL divergence co-optimization."
+---
+
+The `optimized` method replaces manual hyperparameter selection with automated Bayesian optimization. Instead of using fixed projection strengths, Optuna TPE search finds the per-layer ablation weights that minimize the (refusal rate, KL divergence) Pareto front. On top of the optimizer, `optimized` adds two novel preservation techniques: CoT-Aware Ablation and KL-Divergence Co-Optimization.
+
+**Method configuration from source:**
+
+```python
+"optimized": {
+    "n_directions": 4,
+    "direction_method": "svd",
+    "norm_preserve": True,
+    "regularization": 0.0,
+    "refinement_passes": 1,
+    "project_biases": True,
+    "use_chat_template": True,
+    "use_whitened_svd": True,
+    "true_iterative_refinement": False,
+    "use_jailbreak_contrast": True,
+    "layer_adaptive_strength": True,
+    "safety_neuron_masking": False,
+    "per_expert_directions": True,
+    "attention_head_surgery": True,
+    "use_sae_features": True,
+    "invert_refusal": False,
+    "winsorize_activations": True,
+    "winsorize_percentile": 0.01,
+    "float_layer_interpolation": True,
+    "cot_aware": True,
+    "use_kl_optimization": True,
+    "kl_budget": 0.5,
+    "use_lora_ablation": False,
+    "bayesian_trials": 50,
+}
+```
+
+## Parametric Kernel Optimization (Bayesian / Optuna TPE)
+
+The optimizer searches over 7 global parameters that define a bell-curve layer weighting kernel:
+
+| Parameter | What it controls | Search range |
+|-----------|-----------------|-------------|
+| `max_weight` | Peak projection strength at the central layer | 0.5 – 1.0 |
+| `peak_position` | Which layer (normalized 0–1) has maximum weight | 0.2 – 0.8 |
+| `min_weight` | Floor weight at edge layers | 0.0 – 0.3 |
+| `spread` | Width of the bell curve (how many layers get strong projection) | 0.1 – 0.6 |
+| `attn_scale` | Multiplier for attention module projection strength | 0.3 – 1.0 |
+| `mlp_scale` | Multiplier for MLP/FFN projection strength | 0.3 – 1.0 |
+| `dir_idx` | Float-valued SVD direction index for interpolation | 0.0 – (n_directions - 1) |
+
+At each trial, the optimizer assigns a projection weight to every layer using the Gaussian-shaped kernel, applies the projection, evaluates refusal rate and KL divergence, and records the result. After `bayesian_trials=50` trials, it applies the parameters from the Pareto-optimal trial.
+
+<Note>
+  The Bayesian optimizer is inspired by Heretic (p-e-w, 2025) which pioneered Optuna TPE for abliteration. OBLITERATUS extends it with MoE-aware granularity (per-expert directions), multi-direction SVD instead of single diff-of-means, and SAE feature-level precision.
+</Note>
+
+## CoT-Aware Ablation
+
+Chain-of-thought reasoning models encode their reasoning process in the residual stream before generating the final answer. Some of those reasoning directions are geometrically close to refusal directions — they both appear in similar hidden state positions and can be confused by SVD extraction.
+
+`cot_aware=True` enables CoT-Aware Ablation:
+
+1. **Multi-position activation collection**: instead of capturing only the last token's activation, the pipeline collects activations at the last token, the 75th-percentile position, and the 50th-percentile position, then averages them
+2. **Reasoning-critical direction identification**: any direction that is used by the model to generate CoT reasoning tokens (high activation at reasoning positions) is flagged as `_cot_preserve_directions`
+3. **Orthogonalization**: before applying each refusal direction, it is orthogonalized against all identified CoT directions — ensuring the projection doesn't bleed into reasoning-critical subspaces
+
+This preserves chain-of-thought quality on reasoning models (DeepSeek-R1 distillations, Qwen3 thinking mode, QwQ) while still removing refusal.
+
+## KL-Divergence Co-Optimization
+
+With `use_kl_optimization=True` and `kl_budget=0.5`, the optimizer includes KL divergence as a second objective alongside refusal rate. The `kl_budget` is a soft ceiling: projections that would push the model's output distribution more than `kl_budget` nats away from the original are partially reverted.
+
+The process:
+
+1. Before EXCISE, the pipeline captures baseline logits for a set of evaluation prompts (`_capture_baseline_kl_logits`)
+2. After each projection step, it measures the KL divergence between the current and baseline distributions per layer (`_kl_contributions`)
+3. Layers where KL exceeds budget get their projection strength reduced — partially reverting the weight change for that layer only
+
+This creates a per-layer feedback loop: remove as much refusal as possible, but pull back when a specific layer's projection is damaging general capability.
+
+## Best for
+
+- Cases where capability preservation is critical and you have compute budget to run 50 optimization trials
+- Reasoning models (DeepSeek-R1, Qwen3-thinking, QwQ) where CoT preservation is required
+- Models where `advanced` achieves acceptable refusal removal but slightly too much perplexity drift
+- MoE models where precision matters but `surgical`'s full EGA is overkill
+
+<Warning>
+  `optimized` takes significantly longer than `advanced` due to the 50 Bayesian trials. Each trial requires a full excision pass and evaluation pass. On a 7B model, expect 30-90 minutes depending on hardware, vs 5-15 minutes for `advanced`.
+</Warning>
+
+## CLI usage
+
+```bash
+# Optimized method
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct --method optimized
+
+# On a reasoning model
+obliteratus obliterate deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
+    --method optimized \
+    --output-dir ./optimized-liberated
+
+# With quantization for larger models
+obliteratus obliterate Qwen/Qwen3-14B \
+    --method optimized \
+    --quantization 4bit
+```
+
+## Python API usage
+
+```python
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="optimized",
+    output_dir="optimized_liberated",
+)
+result_path = pipeline.run()
+
+# Bayesian optimizer results
+# Best parameters are applied during EXCISE and recorded in _quality_metrics
+print(pipeline._quality_metrics)
+# {
+#   'perplexity': 11.0,
+#   'coherence': 0.95,
+#   'refusal_rate': 0.03,
+#   'kl_divergence': 0.09,
+# }
+
+# Per-layer KL contributions tracked during optimization
+# pipeline._kl_contributions  # {layer_idx: float}
+
+# Float layer interpolation weights
+# pipeline._float_layer_weights  # {layer_idx: float}
+
+# CoT preserve directions (if cot_aware=True)
+# pipeline._cot_preserve_directions  # {layer_idx: tensor}
+```
+
+## Output metrics to expect
+
+Typical ranges on a 7-8B instruct model with `optimized` (50 trials):
+
+| Metric | Expected range |
+|--------|----------------|
+| Refusal rate | 0.01 – 0.06 |
+| Perplexity delta vs baseline | +0.1 – +0.8 |
+| KL divergence | 0.05 – 0.18 |
+| Coherence | 0.93 – 0.97 |
+
+<Tip>
+  If you want the best quality but can't afford 50 Bayesian trials, use `informed` instead. The `InformedAbliterationPipeline` uses analysis modules to warm-start the optimizer's search space, often converging on near-optimal parameters in fewer trials.
+</Tip>

@@ -1,0 +1,270 @@
+---
+title: "Study Presets"
+description: "Ten pre-configured ablation studies you can run out of the box — from quick sanity checks to full guardrail mapping."
+---
+
+Instead of configuring strategies, sample counts, and sequence lengths manually, you can pick a preset and run immediately. Each preset is a curated recipe that selects the right combination of ablation strategies for a specific research goal.
+
+```bash
+# Browse all presets
+obliteratus presets
+
+# Run with a preset
+obliteratus run examples/preset_quick.yaml
+```
+
+---
+
+## All 10 presets
+
+| Key | Name | Strategies | Max Samples | Purpose |
+|---|---|---|---|---|
+| `quick` | Quick Scan | `layer_removal`, `ffn_ablation` | 25 | Fast sanity check |
+| `full` | Full Sweep | All 4 | 200 | Complete component sweep |
+| `attention` | Attention Deep-Dive | `head_pruning` | 100 | Attention circuit analysis |
+| `layers` | Layer Importance | `layer_removal`, `ffn_ablation` | 100 | Layer depth profile |
+| `knowledge` | Knowledge Localization | `ffn_ablation`, `embedding_ablation` | 150 | Factual knowledge localization |
+| `pruning` | Pruning Candidates | `head_pruning`, `ffn_ablation` | 100 | Compression target finding |
+| `embeddings` | Embedding Analysis | `embedding_ablation` | 100 | Representation structure |
+| `jailbreak` | Jailbreak Analysis | `head_pruning`, `ffn_ablation`, `embedding_ablation` | 400 | Refusal circuit localization |
+| `guardrail` | Guardrail Ablation | All 4 | 300 | Full safety ablation |
+| `robustness` | Robustness Test | `layer_removal`, `head_pruning`, `ffn_ablation` | 500 | Stress testing |
+
+---
+
+## Preset reference
+
+<AccordionGroup>
+  <Accordion title="quick — Quick Scan">
+    **Strategies:** `layer_removal`, `ffn_ablation`  
+    **Max samples:** 25 | **Batch size:** 4 | **Max length:** 128  
+    **Tags:** fast, general
+
+    Fast sanity check. Removes each layer once and each FFN once. Good for a first look at any model.
+
+    Use this when you want to verify your setup is working and get a rough sense of a model's layer sensitivity before committing to a longer run. Completes in minutes on GPU, tens of minutes on CPU for small models.
+  </Accordion>
+
+  <Accordion title="full — Full Sweep">
+    **Strategies:** `layer_removal`, `head_pruning`, `ffn_ablation`, `embedding_ablation` (chunk_size: 48)  
+    **Max samples:** 200 | **Batch size:** 4 | **Max length:** 256  
+    **Tags:** thorough, general
+
+    Run every strategy on every component. Layers, heads, FFNs, and embedding chunks. The most thorough option — can be slow on large models.
+
+    Use this when you want a complete picture of the model's internal structure. On a 7B model with 32 layers and 32 heads (1,024 head ablations + 32 layer ablations + 32 FFN ablations + 16 embedding ablations = ~1,104 total ablations), this is a significant compute job — plan accordingly.
+  </Accordion>
+
+  <Accordion title="attention — Attention Deep-Dive">
+    **Strategies:** `head_pruning`  
+    **Max samples:** 100 | **Batch size:** 4 | **Max length:** 256  
+    **Tags:** attention, heads, focused
+
+    Focus exclusively on attention heads. Prunes every head individually to find which heads are critical vs. redundant. Essential for understanding multi-head attention allocation.
+
+    This preset is the starting point for mechanistic interpretability work. Most heads will show near-zero impact when pruned; a small subset will cause sharp perplexity spikes. Cross-reference with safety-probing prompts to identify heads in the refusal circuit.
+  </Accordion>
+
+  <Accordion title="layers — Layer Importance">
+    **Strategies:** `layer_removal`, `ffn_ablation`  
+    **Max samples:** 100 | **Batch size:** 4 | **Max length:** 256  
+    **Tags:** layers, depth, general
+
+    Remove each transformer layer one at a time and also ablate each FFN block. Reveals the depth profile of the model — which layers carry the most information.
+
+    Produces two complementary views: the full-layer removal score (attention + FFN together) and the FFN-only score. Comparing these per layer tells you how much of each layer's importance comes from the attention mechanism vs. the MLP.
+  </Accordion>
+
+  <Accordion title="knowledge — Knowledge Localization">
+    **Strategies:** `ffn_ablation`, `embedding_ablation` (chunk_size: 32)  
+    **Max samples:** 150 | **Batch size:** 4 | **Max length:** 256  
+    **Tags:** knowledge, ffn, embeddings
+
+    Targets the FFN/MLP blocks and embedding dimensions. FFNs are believed to store factual knowledge — this preset helps identify where knowledge is concentrated in the model.
+
+    Best used with a domain-specific evaluation dataset rather than wikitext. Swap in a fact-checking dataset or a QA set for the domain you want to localize, and the FFN impact profile will reveal which layers are load-bearing for that knowledge.
+  </Accordion>
+
+  <Accordion title="pruning — Pruning Candidates">
+    **Strategies:** `head_pruning`, `ffn_ablation`  
+    **Max samples:** 100 | **Batch size:** 4 | **Max length:** 256  
+    **Tags:** pruning, compression, efficiency
+
+    Designed for model compression research. Tests every head and every FFN to find components that can be removed with minimal quality loss. Use the results to guide structured pruning.
+
+    The components with the lowest metric delta after ablation are the best candidates for permanent removal. This approach is more targeted than magnitude-based pruning because it directly measures functional impact.
+  </Accordion>
+
+  <Accordion title="embeddings — Embedding Analysis">
+    **Strategies:** `embedding_ablation` (chunk_size: 16)  
+    **Max samples:** 100 | **Batch size:** 4 | **Max length:** 256  
+    **Tags:** embeddings, representation
+
+    Systematically ablate embedding dimension ranges to understand which dimensions carry the most semantic signal. Uses fine-grained 16-dim chunks for detailed analysis.
+
+    With `chunk_size: 16`, a model with 768-dim embeddings (e.g., GPT-2) produces 48 ablation specs; a 4096-dim model (e.g., LLaMA 7B) produces 256. Plan evaluation budget accordingly.
+  </Accordion>
+
+  <Accordion title="jailbreak — Jailbreak Analysis">
+    **Strategies:** `head_pruning`, `ffn_ablation`, `embedding_ablation` (chunk_size: 16)  
+    **Max samples:** 400 | **Batch size:** 4 | **Max length:** 512  
+    **Tags:** jailbreak, refusal, alignment, uncensored, interpretability
+
+    Surgical preset for locating refusal-mediating components. Inspired by *Refusal in Language Models Is Mediated by a Single Direction* (Arditi et al., 2024). Uses fine-grained head pruning, FFN ablation, and 16-dim embedding chunks to pinpoint which specific components encode refusal behaviors.
+
+    Best used on instruct/chat models — compare results against the base model to isolate RLHF/DPO imprints. Pair with custom safety-probing prompts for behavioral analysis beyond perplexity.
+
+    The 400-sample evaluation set and 512 max-length give enough signal to detect subtle behavioral shifts. On a 7B model, expect this to be a multi-hour run even on A100.
+  </Accordion>
+
+  <Accordion title="guardrail — Guardrail Ablation">
+    **Strategies:** `layer_removal`, `head_pruning`, `ffn_ablation`, `embedding_ablation` (chunk_size: 24)  
+    **Max samples:** 300 | **Batch size:** 4 | **Max length:** 512  
+    **Tags:** safety, alignment, guardrails, uncensored, research
+
+    Systematic removal of components to study where safety and alignment behaviors are encoded. Ablates every layer, every attention head, every FFN block, and embedding dimensions. Designed for alignment researchers studying refusal mechanisms, RLHF imprints, and safety fine-tuning localization.
+
+    Use with safety-tuned models for best results. The combination of all four strategies provides a comprehensive map — layer ablation for macro-level importance, head pruning for circuit-level precision, FFN ablation for knowledge localization, and embedding ablation for representation-level analysis.
+  </Accordion>
+
+  <Accordion title="robustness — Robustness Test">
+    **Strategies:** `layer_removal`, `head_pruning`, `ffn_ablation`  
+    **Max samples:** 500 | **Batch size:** 8 | **Max length:** 512  
+    **Tags:** robustness, thorough
+
+    Stress-test the model by ablating layers, heads, and FFNs with a larger evaluation set. Good for understanding how fragile the model is and which components are load-bearing.
+
+    The 500-sample evaluation set gives statistically more reliable delta estimates than the smaller presets. Use this when you need high confidence in your importance rankings, or when you're comparing results across multiple model checkpoints.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## How to use a preset
+
+<Tabs>
+  <Tab title="CLI — YAML file">
+    The simplest approach: put `preset: <key>` in your YAML, then provide just the model and dataset.
+
+    ```yaml
+    preset: guardrail
+
+    model:
+      name: meta-llama/Llama-3.1-8B-Instruct
+      task: causal_lm
+      dtype: float16
+      device: cuda
+
+    dataset:
+      name: wikitext
+      subset: wikitext-2-raw-v1
+      split: test
+      text_column: text
+
+    output_dir: results/llama_guardrail
+    ```
+
+    ```bash
+    obliteratus run my_guardrail_study.yaml
+    ```
+  </Tab>
+  <Tab title="CLI — examples directory">
+    Use one of the shipped preset example files directly:
+
+    ```bash
+    obliteratus run examples/preset_quick.yaml
+    obliteratus run examples/preset_attention.yaml
+    obliteratus run examples/preset_knowledge.yaml
+    ```
+
+    Each file in `examples/` is pre-configured with GPT-2 as the model. Edit the `model.name` field to run the same preset on a different model.
+  </Tab>
+  <Tab title="CLI — --preset flag">
+    Pass the preset key directly on the command line:
+
+    ```bash
+    obliteratus run config.yaml --preset quick
+    ```
+
+    The `--preset` flag overrides any `preset` key already in the config file.
+  </Tab>
+  <Tab title="Python API">
+    Access presets programmatically:
+
+    ```python
+    from obliteratus.study_presets import get_study_preset, list_study_presets
+
+    # Get a specific preset
+    preset = get_study_preset("jailbreak")
+    print(preset.name)          # "Jailbreak Analysis"
+    print(preset.strategies)    # [{"name": "head_pruning", ...}, ...]
+    print(preset.max_samples)   # 400
+    print(preset.tags)          # ["jailbreak", "refusal", "alignment", ...]
+
+    # List all presets
+    for p in list_study_presets():
+        print(f"{p.key:15s}  {p.name}")
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## How presets interact with custom YAML
+
+When you set `preset: <key>` in a YAML config, the preset provides **default values** for `strategies`, `metrics`, `batch_size`, and `max_length`. Any key you explicitly set in the YAML **overrides** the preset value.
+
+This means you can use a preset as a starting point and tune specific parameters:
+
+```yaml
+# Use the jailbreak preset, but override max_length and batch_size
+preset: jailbreak
+
+model:
+  name: mistralai/Mistral-7B-v0.3
+  task: causal_lm
+  dtype: float16
+  device: cuda
+
+dataset:
+  name: wikitext
+  subset: wikitext-2-raw-v1
+  split: test
+  text_column: text
+  max_samples: 200  # override preset's 400
+
+max_length: 256     # override preset's 512
+output_dir: results/mistral_jailbreak
+```
+
+<Note>
+  The `max_samples` override must be set inside the `dataset` block. All other preset fields (`batch_size`, `max_length`, `strategies`) are overridden by top-level keys in the YAML.
+</Note>
+
+---
+
+## When to use each preset
+
+| Goal | Recommended preset |
+|---|---|
+| First time running on a new model | `quick` |
+| Complete structural map | `full` |
+| Find which attention heads are critical | `attention` |
+| Rank layers by importance | `layers` |
+| Locate where factual knowledge is stored | `knowledge` |
+| Find heads/FFNs safe to prune for compression | `pruning` |
+| Analyze embedding dimension importance | `embeddings` |
+| Locate refusal circuits in an instruct model | `jailbreak` |
+| Full alignment/safety mechanism mapping | `guardrail` |
+| Measure model fragility with high sample count | `robustness` |
+
+---
+
+## Browsing presets in the CLI
+
+```bash
+# List all presets with names, strategies, and sample counts
+obliteratus presets
+```
+
+The output shows each preset key, its full name, the strategies it runs, max samples, and tags — so you can pick the right one without consulting the docs.

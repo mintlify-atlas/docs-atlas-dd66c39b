@@ -1,122 +1,135 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "OBLITERATUS",
+  "theme": "maple",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#fac518",
+    "light": "#fcefd0",
+    "dark": "#414043"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "/favicon.png",
+  "logo": {
+    "light": "https://media.brand.dev/23c9971c-b717-4fa4-85ad-3a475d130e89.png",
+    "dark": "https://media.brand.dev/6265ba80-7e8a-4522-b5dd-502582499bb2.svg"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/elder-plinius/OBLITERATUS"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/elder-plinius/OBLITERATUS"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Usage",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "usage/huggingface-spaces",
+              "usage/local-ui",
+              "usage/cli",
+              "usage/python-api",
+              "usage/colab",
+              "usage/yaml-configs"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Concepts",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "concepts/abliteration",
+              "concepts/refusal-directions",
+              "concepts/intervention-paradigms"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Obliteration Methods",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "methods/overview",
+              "methods/basic",
+              "methods/advanced",
+              "methods/surgical",
+              "methods/optimized",
+              "methods/informed-pipeline"
+            ]
+          },
+          {
+            "group": "Analysis Modules",
+            "pages": [
+              "analysis/overview",
+              "analysis/cross-layer-alignment",
+              "analysis/activation-probing",
+              "analysis/concept-cone-geometry",
+              "analysis/alignment-imprint",
+              "analysis/defense-robustness",
+              "analysis/steering-vectors",
+              "analysis/evaluation-suite"
+            ]
+          },
+          {
+            "group": "Ablation Studies",
+            "pages": [
+              "ablation/strategies",
+              "ablation/presets",
+              "ablation/model-library"
+            ]
+          },
+          {
+            "group": "Community Research",
+            "pages": [
+              "community/overview",
+              "community/telemetry",
+              "community/leaderboard",
+              "community/contributing"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Core",
             "pages": [
-              "api-reference/introduction"
+              "api/abliteration-pipeline",
+              "api/informed-pipeline",
+              "api/sweep"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Analysis",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/analysis-modules",
+              "api/steering-vectors"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "api/cli-reference"
+            ]
+          },
+          {
+            "group": "Community",
+            "pages": [
+              "api/community"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

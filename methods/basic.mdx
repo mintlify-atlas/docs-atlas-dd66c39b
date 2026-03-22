@@ -1,0 +1,115 @@
+---
+title: "Basic Method"
+description: "The simplest and fastest obliteration method — diff-in-means with a single direction."
+---
+
+The `basic` method is a direct implementation of [Arditi et al. (2024)](https://arxiv.org/abs/2406.11717): extract the single refusal direction at each layer via difference-in-means, then project it out of the weight matrices. No SVD, no norm preservation, no bias projection, no iterative refinement.
+
+## What it does
+
+For each transformer layer, `basic` computes:
+
+```
+refusal_direction = mean(harmful_activations) - mean(harmless_activations)
+refusal_direction = refusal_direction / ||refusal_direction||
+```
+
+Then projects that direction out of every output projection weight matrix (`o_proj`, `down_proj`, etc.) in the selected layers:
+
+```
+W_new = W - W @ r @ r^T
+```
+
+No regularization (`regularization=0.0`), no norm restoration after projection, no bias vectors touched. One pass.
+
+**Method configuration from source:**
+
+```python
+"basic": {
+    "n_directions": 1,
+    "direction_method": "diff_means",
+    "norm_preserve": False,
+    "regularization": 0.0,
+    "refinement_passes": 1,
+    "project_biases": False,
+    "use_chat_template": False,
+    "use_whitened_svd": False,
+    "true_iterative_refinement": False,
+}
+```
+
+<Note>
+  `use_chat_template=False` means prompts are fed raw to the model without wrapping them in the instruct template. This is intentional for the basic method — it matches the original Arditi et al. setup. For instruct-tuned models you may want `--method advanced` which enables chat template wrapping by default.
+</Note>
+
+## When to use it
+
+- **Quick sanity check**: verify the pipeline runs on a new model before committing to a longer method
+- **Small models** (sub-2B): fewer parameters means single-direction removal is often sufficient
+- **Baseline comparison**: `basic` is the reference point — if a more expensive method doesn't measurably outperform it on your model, the simpler option is correct
+- **Reproducing Arditi et al. (2024)**: for research that needs the original single-direction method
+
+<Warning>
+  Without `norm_preserve`, weight matrix norms drift after projection. On larger models with many layers this can compound into coherence degradation. If you observe perplexity spikes or incoherent outputs, switch to `advanced`.
+</Warning>
+
+## CLI usage
+
+```bash
+# Basic method
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct --method basic
+
+# With custom output directory
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct \
+    --method basic \
+    --output-dir ./basic-liberated
+
+# On CPU (small models only)
+obliteratus obliterate gpt2 --method basic --device cpu --dtype float32
+```
+
+## Python API usage
+
+```python
+from obliteratus.abliterate import AbliterationPipeline
+
+pipeline = AbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    method="basic",
+    output_dir="abliterated_basic",
+)
+result_path = pipeline.run()
+
+# Inspect extracted directions (one per layer)
+for layer_idx, direction in pipeline.refusal_directions.items():
+    print(f"Layer {layer_idx}: direction shape {direction.shape}")
+
+# Check quality metrics from VERIFY stage
+print(pipeline._quality_metrics)
+# e.g. {'perplexity': 12.4, 'coherence': 0.91, 'refusal_rate': 0.08, 'kl_divergence': 0.23}
+```
+
+## Limitations vs more advanced methods
+
+| Limitation | Impact | Fix |
+|------------|--------|-----|
+| Single direction only | Misses refusal mechanisms that require multiple directions to characterize (polyhedral concept cone) | Use `advanced` (4 dirs) or `aggressive` (8 dirs) |
+| No norm preservation | Weight norms drift post-projection; can degrade coherence on large models | Use `advanced` (`norm_preserve=True`) |
+| No bias projection | Refusal signal in bias vectors is left intact, leaving partial refusal pathways active | Use `advanced` (`project_biases=True`) |
+| Single pass | Rotated residual directions (refusal that shifts into adjacent subspaces after the first pass) are not caught | Use `advanced` (2 passes) or `aggressive` (3 passes) |
+| No chat template | Instruct model's refusal circuits may not be fully activated by raw prompts | Use `advanced` (`use_chat_template=True`) |
+
+## Output metrics to expect
+
+Typical ranges on a 7-8B instruct model:
+
+| Metric | `basic` typical range | `advanced` typical range |
+|--------|----------------------|--------------------------|
+| Refusal rate | 0.05 – 0.20 | 0.02 – 0.10 |
+| Perplexity delta | +0.5 – +3.0 | +0.2 – +1.5 |
+| KL divergence | 0.15 – 0.45 | 0.08 – 0.25 |
+| Coherence | 0.85 – 0.93 | 0.90 – 0.96 |
+
+<Tip>
+  After running `basic`, check `pipeline._quality_metrics["refusal_rate"]`. If it's above 0.15, the single direction wasn't sufficient — run `advanced` instead.
+</Tip>

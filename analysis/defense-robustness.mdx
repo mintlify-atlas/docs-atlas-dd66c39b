@@ -1,0 +1,139 @@
+---
+title: "Defense Robustness Evaluation"
+description: "Predict whether guardrails will self-repair after removal — the Ouroboros effect."
+---
+
+`DefenseRobustnessEvaluator` quantifies how resilient a model's refusal mechanisms are against abliteration. Its central contribution is measuring the **Ouroboros effect**: when a refusal direction is removed from one layer, other layers partially compensate by rotating refusal signal into their own subspaces. Joad et al. (2026) found approximately 70% self-repair in tested models.
+
+<Note>
+This is a novel technique. Prior abliteration tools treat removal as one-shot; this module predicts whether a second pass will be needed before you start.
+</Note>
+
+## The Ouroboros effect
+
+When a refusal direction is projected out of a layer's weight matrix, the residual stream at that layer no longer carries the original direction. However, adjacent layers — particularly those already carrying some partial refusal signal — can rotate their own representations to compensate. The guardrails try to reassemble themselves.
+
+This creates two practical problems:
+
+1. **Single-pass removal is incomplete** — the model may still refuse after one pass, even if the target layers were correctly identified
+2. **Compensating layers become entangled** — layers that weren't originally high-risk may become high-risk after compensation, making subsequent passes harder
+
+## What defense robustness measures
+
+### `DefenseProfile`
+
+The overall characterization of a model's defensive properties:
+
+| Field | Meaning |
+|-------|---------|
+| `alignment_type_estimate` | Estimated alignment method (DPO/RLHF/CAI/SFT) |
+| `refusal_concentration` | How concentrated refusal is in few layers (high = easier to remove) |
+| `refusal_layer_spread` | Number of layers involved in refusal |
+| `self_repair_estimate` | Estimated self-repair capacity (0–1) |
+| `entanglement_score` | Safety-capability entanglement (0 = cleanly separable, 1 = fused) |
+| `estimated_robustness` | `"low"`, `"medium"`, `"high"`, or `"very_high"` |
+
+### `SelfRepairResult`
+
+Per-layer quantification of the Ouroboros effect:
+
+| Field | Meaning |
+|-------|---------|
+| `original_refusal_strength` | Refusal signal before any obliteration |
+| `post_ablation_residual` | Refusal signal remaining in the ablated layer |
+| `compensated_refusal` | Refusal signal recovered by other layers |
+| `repair_ratio` | `compensated / original` — fraction of original signal recovered via self-repair |
+| `compensating_layers` | Which specific layers picked up the slack |
+
+### `EntanglementMap`
+
+Maps safety-capability coupling across the model:
+
+| Field | Meaning |
+|-------|---------|
+| `layer_entanglement` | Per-layer entanglement score |
+| `most_entangled_layers` | Layers where safety and capability are fused — risky to modify |
+| `least_entangled_layers` | Layers where safety can be removed with minimal capability cost |
+| `overall_entanglement` | Model-wide entanglement score |
+| `capability_sensitivity` | Estimated per-capability degradation if entangled layers are modified |
+
+## Python usage
+
+```python
+from obliteratus.analysis import DefenseRobustnessEvaluator
+
+evaluator = DefenseRobustnessEvaluator()
+
+# Get a full defense profile of the model
+profile = evaluator.profile(
+    refusal_directions=pipeline.refusal_directions,
+    per_layer_strength=pipeline._per_layer_refusal_strength,
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+)
+
+print(f"Estimated robustness: {profile.estimated_robustness}")
+print(f"Self-repair estimate: {profile.self_repair_estimate:.2f}")
+print(f"Entanglement score: {profile.entanglement_score:.2f}")
+print(f"Layer spread: {profile.refusal_layer_spread} layers")
+```
+
+```python
+# Measure self-repair at each layer
+for layer_idx in pipeline._strong_layers:
+    repair = evaluator.measure_self_repair(
+        model=model,
+        tokenizer=tokenizer,
+        harmful_prompts=harmful_prompts,
+        harmless_prompts=harmless_prompts,
+        refusal_directions=pipeline.refusal_directions,
+        target_layer=layer_idx,
+    )
+
+    print(f"Layer {layer_idx:3d}: repair_ratio={repair.repair_ratio:.2f}  "
+          f"compensators={repair.compensating_layers}")
+```
+
+```python
+# Build the full entanglement map
+entanglement = evaluator.build_entanglement_map(
+    model=model,
+    tokenizer=tokenizer,
+    harmful_prompts=harmful_prompts,
+    harmless_prompts=harmless_prompts,
+    refusal_directions=pipeline.refusal_directions,
+)
+
+print(f"Overall entanglement: {entanglement.overall_entanglement:.3f}")
+print(f"Safe layers to modify: {entanglement.least_entangled_layers}")
+print(f"Risky layers: {entanglement.most_entangled_layers}")
+
+# Per-capability degradation estimate
+for capability, sensitivity in entanglement.capability_sensitivity.items():
+    print(f"  {capability}: {sensitivity:.3f}")
+```
+
+## How it feeds into the informed pipeline
+
+Defense robustness evaluation auto-configures two aspects of obliteration in `InformedAbliterationPipeline`:
+
+**Refinement passes** — if `self_repair_estimate` is high, the VERIFY stage runs additional targeted passes at the compensating layers identified during analysis. This is the automated response to the Ouroboros effect.
+
+**Entanglement-gated layer skipping** — layers in `most_entangled_layers` are either skipped entirely or modified with reduced projection strength, trading some refusal removal for capability preservation.
+
+```python
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+
+pipeline = InformedAbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_informed",
+)
+output_path, report = pipeline.run_informed()
+
+print(f"Ouroboros passes triggered: {report.ouroboros_passes}")
+print(f"Layers skipped (entanglement): {report.insights.skipped_entangled_layers}")
+print(f"Self-repair estimate: {report.insights.self_repair_probability:.2f}")
+```
+
+<Warning>
+High entanglement (`overall_entanglement > 0.7`) means the model's refusal circuits overlap substantially with general reasoning circuits. Aggressive obliteration on such models can degrade coherence and factual accuracy. The `optimized` method's KL co-optimization is designed for this case.
+</Warning>

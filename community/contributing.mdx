@@ -1,0 +1,290 @@
+---
+title: "Contributing"
+description: "How to contribute to OBLITERATUS — from research data to code and documentation."
+---
+
+OBLITERATUS is a community research project. There are four ways to contribute, and all of them advance the science.
+
+<CardGroup cols={2}>
+  <Card title="Research data" icon="chart-line">
+    Contribute benchmark results from your obliteration runs via telemetry or PR-based JSON files.
+  </Card>
+  <Card title="Code" icon="code">
+    New analysis modules, new abliteration methods, bug fixes, and improvements.
+  </Card>
+  <Card title="Model presets" icon="database">
+    Add models to `presets.py` to expand the 116-model curated registry.
+  </Card>
+  <Card title="Documentation" icon="book">
+    Improve the docs, add examples, or write guides.
+  </Card>
+</CardGroup>
+
+## Contributing research data
+
+### Via telemetry (automatic)
+
+The simplest contribution: add `--contribute` to any obliterate command.
+
+```bash
+obliteratus obliterate meta-llama/Llama-3.1-8B-Instruct \
+    --method advanced \
+    --contribute \
+    --contribute-notes "A100 80GB, default prompts"
+```
+
+This enables opt-in telemetry for that run. The benchmark record is written to `~/.obliteratus/telemetry.jsonl` and synced to the central Hub dataset in a background thread. See [Telemetry](/community/telemetry) for full details on what is and isn't collected.
+
+### Via PR-based local contributions
+
+If you prefer to keep data local until you explicitly submit it, use the Python API to save contribution JSON files and then submit them as a pull request:
+
+<Steps>
+  <Step title="Run the pipeline">
+    ```python
+    from obliteratus.abliterate import AbliterationPipeline
+    from obliteratus.community import save_contribution
+
+    pipeline = AbliterationPipeline(
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        method="advanced",
+        output_dir="abliterated",
+    )
+    pipeline.run()
+    ```
+  </Step>
+
+  <Step title="Save the contribution JSON">
+    ```python
+    path = save_contribution(
+        pipeline,
+        model_name="meta-llama/Llama-3.1-8B-Instruct",
+        notes="A100 80GB, default prompts",
+    )
+    print(f"Saved to: {path}")
+    # Saved to: community_results/llama-3-1-8b-instruct_advanced_20260322_143052.json
+    ```
+
+    The filename encodes the short model name, method, and timestamp. The JSON file contains a contribution envelope wrapping the full telemetry report:
+
+    ```json
+    {
+      "contribution_schema_version": 1,
+      "timestamp": "20260322T143052Z",
+      "model_name": "meta-llama/Llama-3.1-8B-Instruct",
+      "config_fingerprint": "a3f2b1c9",
+      "notes": "A100 80GB, default prompts",
+      "telemetry": { ... }
+    }
+    ```
+  </Step>
+
+  <Step title="Preview aggregated results locally">
+    Before submitting, verify that your contribution aggregates correctly:
+
+    ```python
+    from obliteratus.community import load_contributions, aggregate_results
+
+    records = load_contributions("community_results")
+    aggregated = aggregate_results(records)
+
+    for model, methods in aggregated.items():
+        for method, summary in methods.items():
+            print(f"{model}/{method}: {summary['n_runs']} runs")
+    ```
+
+    Or using the CLI:
+
+    ```bash
+    obliteratus aggregate --format summary
+    ```
+  </Step>
+
+  <Step title="Submit a pull request">
+    Open a PR on GitHub adding your `community_results/*.json` file(s). The aggregation pipeline incorporates your data into the community dataset and paper tables automatically.
+
+    ```bash
+    git checkout -b contrib/llama-3-1-8b-advanced
+    git add community_results/
+    git commit -m "Add Llama-3.1-8B advanced method contribution (A100)"
+    gh pr create --title "Community contribution: Llama-3.1-8B advanced"
+    ```
+  </Step>
+</Steps>
+
+### For informed pipeline runs
+
+If you used `InformedAbliterationPipeline`, pass the report to `save_contribution()` to include analysis insights:
+
+```python
+from obliteratus.informed_pipeline import InformedAbliterationPipeline
+from obliteratus.community import save_contribution
+
+pipeline = InformedAbliterationPipeline(
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    output_dir="abliterated_informed",
+)
+output_path, report = pipeline.run_informed()
+
+path = save_contribution(
+    pipeline,
+    model_name="meta-llama/Llama-3.1-8B-Instruct",
+    notes="Informed pipeline, H100",
+    informed_report=report,
+)
+```
+
+This includes the detected alignment method, cone geometry, Ouroboros pass count, and other analysis insights in the contribution record.
+
+## Contributing code
+
+### Development setup
+
+```bash
+git clone https://github.com/elder-plinius/OBLITERATUS.git
+cd OBLITERATUS
+pip install -e ".[dev]"
+```
+
+This installs the package in editable mode with test dependencies (pytest, ruff).
+
+### Running tests
+
+```bash
+# Full suite
+pytest
+
+# Single file
+pytest tests/test_abliterate.py
+
+# Stop on first failure
+pytest -x
+
+# Run a specific test by name
+pytest -k "test_name"
+```
+
+<Note>
+The test suite has 837 tests across 28 test files covering the CLI, all 15 analysis modules, the abliteration pipeline, architecture detection, visualization sanitization, community contributions, edge cases, and evaluation metrics. All tests run on CPU without downloading models. All tests must pass before submitting a PR.
+</Note>
+
+### Code style
+
+OBLITERATUS uses [ruff](https://docs.astral.sh/ruff/) for linting and formatting:
+
+```bash
+# Lint
+ruff check obliteratus/
+
+# Format
+ruff format obliteratus/
+```
+
+Style rules:
+- Line length: 100 characters
+- Target: Python 3.10+
+- Follow existing patterns in the codebase
+
+### Pull request workflow
+
+<Steps>
+  <Step title="Fork and branch">
+    Fork the repo and create a branch from `main`:
+
+    ```bash
+    git checkout -b feature/my-contribution
+    ```
+  </Step>
+
+  <Step title="Make changes and add tests">
+    For new analysis modules, include unit tests with synthetic data — no model downloads required. For bug fixes, add a regression test.
+  </Step>
+
+  <Step title="Run the full check">
+    ```bash
+    pytest && ruff check obliteratus/
+    ```
+
+    Both must pass.
+  </Step>
+
+  <Step title="Write a clear commit message">
+    Explain *why*, not just *what*. One feature or fix per PR. Link related issues with `Fixes #123` or `Closes #123`.
+  </Step>
+
+  <Step title="Open the PR">
+    Include a test plan in the PR description. The CI pipeline will run the full test suite automatically.
+  </Step>
+</Steps>
+
+## Adding a model preset
+
+Model presets live in `obliteratus/presets.py`. To add a model to the 116-model curated registry:
+
+1. Add an entry to the appropriate tier dict (`TINY_MODELS`, `SMALL_MODELS`, `MEDIUM_MODELS`, `LARGE_MODELS`, or `FRONTIER_MODELS`).
+2. Include the HuggingFace model ID, VRAM estimate, and any architecture notes.
+3. Add a corresponding test in `tests/` if the new model has unusual architecture handling.
+4. Submit a PR.
+
+## Adding a new analysis module
+
+All 15 analysis modules live under `obliteratus/analysis/`. To add a new one:
+
+1. Create a new file in `obliteratus/analysis/` following the existing module structure.
+2. Export the new class from `obliteratus/analysis/__init__.py`.
+3. Add unit tests in `tests/` using synthetic tensors — no live model downloads.
+4. Document the module in a PR description explaining what research question it answers.
+5. Optionally wire it into the informed pipeline in `obliteratus/informed_pipeline.py` if it produces configuration-relevant insights.
+
+## Project structure
+
+```
+obliteratus/
+  abliterate.py          # Core abliteration pipeline
+  informed_pipeline.py   # Analysis-informed pipeline
+  community.py           # Community contribution system
+  telemetry.py           # Opt-in anonymous telemetry
+  cli.py                 # CLI entry point
+  config.py              # YAML config loading
+  interactive.py         # Interactive mode
+  presets.py             # Model presets
+  runner.py              # Ablation study runner
+  analysis/              # 15 analysis modules
+  evaluation/            # Metrics and benchmarks
+  models/                # Model loading utilities
+  reporting/             # Report generation
+  strategies/            # Ablation strategies (layer, head, FFN, embedding)
+tests/                   # 28 test files
+Examples/                # YAML config examples
+```
+
+## Reporting bugs
+
+Open a GitHub issue with:
+- What you expected to happen
+- What actually happened
+- Steps to reproduce
+- Model name and hardware (GPU/CPU, VRAM)
+
+## Security vulnerabilities
+
+<Warning>
+Do **not** open a public GitHub issue to report a security vulnerability.
+</Warning>
+
+OBLITERATUS uses responsible disclosure. To report a vulnerability in the software (code execution, dependency issues, or similar):
+
+1. Open a [private security advisory](https://github.com/elder-plinius/OBLITERATUS/security/advisories/new) with a description, reproduction steps, potential impact, and suggested fix.
+2. Expect acknowledgment within 48 hours and an assessment within one week.
+3. Critical issues are typically patched within two weeks.
+
+**Out of scope**: The tool's intended behavior — removing model guardrails — is not a security vulnerability. It is the stated purpose of the tool.
+
+## License
+
+OBLITERATUS is dual-licensed:
+
+- **AGPL-3.0** for open source use. By contributing, you agree that your contributions will be licensed under AGPL-3.0.
+- **Commercial license** available for organizations that cannot comply with AGPL obligations. Contact via [GitHub Issues](https://github.com/elder-plinius/OBLITERATUS/issues).
+
+This is the same dual-licensing model used by MongoDB, Qt, and Grafana.
